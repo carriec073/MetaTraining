@@ -1,0 +1,261 @@
+<!doctype html>
+<!-- Example taken from http://http://www.factorsdb.org/ and adapted for use with JATOS-->
+<html>
+
+<head>
+  <title>BioTrials No FB 2</title>
+  <!-- Changed for JATOS: Added study assets path -->
+  <!-- Load jsPsych plug-ins and libraries -->
+ <!--<script src="https://ajax.googleapis.com/ajax/libs/jquery/1.11.3/jquery.min.js"></script> -->
+ <!-- <script src="/study_assets/MetaTrainingLowLevelFeedback/BioQuestions/jspsych/jspsych.js"></script>
+  <script src="/study_assets/MetaTrainingLowLevelFeedback/BioQuestions/jspsych/plugin-instructions.js"></script>
+  <script src="/study_assets/MetaTrainingLowLevelFeedback/BioQuestions/jspsych/plugin-html-keyboard-response.js"></script>
+  <script src="/study_assets/MetaTrainingLowLevelFeedback/BioQuestions/jspsych/plugin-survey-multi-choice.js"></script>
+  <script src="/study_assets/MetaTrainingLowLevelFeedback/BioQuestions/jspsych/plugin-survey-text.js"></script>
+  <script src="jatos.js"></script>
+  <script src="/study_assets/MetaTrainingLowLevelFeedback/BioQuestions/TrialList.js"></script>
+  <link rel="stylesheet" href="/study_assets/MetaTrainingLowLevelFeedback/BioQuestions/jspsych/jspsych.css"> -->
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.11.3/jquery.min.js"></script>
+  <script src="BioQuestions/jspsych/jspsych.js"></script>
+  <script src="BioQuestions/jspsych/plugin-instructions.js"></script>
+  <script src="BioQuestions/jspsych/plugin-html-slider-response.js"></script>
+  <script src="BioQuestions/jspsych/plugin-html-keyboard-response.js"></script>
+  <script src="BioQuestions/jspsych/plugin-survey-multi-choice.js"></script>
+  <script src="BioQuestions/jspsych/plugin-survey-text.js"></script>
+  <script src="jatos.js"></script>
+  <script src="BioQuestions/TrialListB.js"></script>
+  <link rel="stylesheet" href="BioQuestions/jspsych/jspsych.css">
+  </style>
+
+  </style>
+</head>
+<body>
+  <div id="jspsych-target"></div>
+</body>
+<script>
+	/* experiment parameters */
+  	var max_response_time = 2500;
+  	var fixation_duration = 500;
+  	var trial_duration = 3000;
+
+	/* Initialize JSPsych*/
+	var jsPsych = initJsPsych({
+  		on_trial_start: jatos.addAbortButton,
+  		on_finish: () => 
+		  jatos.startNextComponent(jsPsych.data.get().json())
+	});
+    
+  /* create the experiment timeline */
+  	var timeline = [];
+
+/*Welcome*/
+	var welcome = {
+		type: jsPsychSurveyText,
+		questions: [
+        	{prompt: 'What is your study ID number?', name: 'ID', columns: 4, required: true}
+      	],
+      	on_finish: function(data) {
+      		var ID = data.response.ID
+			jsPsych.data.addProperties({
+				ID: ID,
+				Task: "BioV2"
+			})
+			console.log(ID) 
+		}
+    };
+
+
+var percent_options = ['0%', '10%', '20%', '30%', '40%', '50%', '60%', '70%', '80%', '90%', '100%'];
+
+/*Global rating - prior to experiment*/
+    var globalrate1 = {
+        type: jsPsychHtmlSliderResponse,
+        stimulus: `<p>This task will require you to answer a series of questions about biology concepts.'</p>
+        <p>'What percentage of these questions do you think you will answer correctly?''</p>`,
+        labels: percent_options,
+		min:0,
+		max:100,
+		slider_start:0,
+		require_movement:true,
+		stimulus_duration:5000,
+		response_ends_trial:true
+    };	
+
+
+  /* instructions */
+  	var instructions = {
+    	type: jsPsychHtmlKeyboardResponse,
+    	stimulus: `<p style="font-size: 32px;">You are going to see a series of questions with two response options.</p>
+     	<p style="font-size: 32px;">If you choose the option on the left of the screen, hit the <b>LEFT ARROW</b> key</p> 
+     	<p style="font-size: 32px;">If you choose the option on the right of the screen, hit the <b>RIGHT ARROW</b> key</p>
+     	<p style="font-size: 32px;">After making a choice, you'll be prompted to rate how sure you are about your answer on a scale from 1 to 4.</p>
+     	<p style="font-size: 32px;">Press any key to begin.</p>`
+    	,
+    	allow_keys: true,
+    	show_clickable_nav: true
+  	};
+  
+  
+  /* prepare test trials */
+  
+  var fixation = {
+  	type: jsPsychHtmlKeyboardResponse,
+  	stimulus: '<p style="font-size: 32px; font-family: monospace;">+</p>',
+  	choices: "NO_KEYS",
+  	trial_duration: 1000,
+  	}
+  
+	  var choiceQuestion = {
+     	 type: jsPsychHtmlKeyboardResponse,
+      	stimulus: function(){
+      		return `<p style="vertical-align: top:5px; font-size:25px;">Choose the left or right option</p>
+			<p style="text-align:center; font-size:32px;">${jsPsych.timelineVariable('Question', true)}</p>
+      		<p style="float:left; font-size:28px;">${jsPsych.timelineVariable('OptionA', true)}</p>
+      		<p style="float:right; font-size:28px;">${jsPsych.timelineVariable('OptionB',true)}</p>`
+			
+      	/*	return `<p style="text-align:center; font-size:32px;">'${jsPsych.timelineVariable('Question', true)}</p>
+      				<table>
+      		          <tr> 
+      		            <td width="50%" float="left">'${jsPsych.timelineVariable('OptionA', true)}</td>
+      		            <td width="50%" align="right">'${jsPsych.timelineVariable('OptionB', true)}</td>
+      		          </tr> 
+      		        </table>`*/
+    	},
+    	choices: ['k', 'l', 'ArrowRight', 'ArrowLeft'],
+      	trial_duration: 25000,
+      	data: {
+			task: 'Response',
+      		question: jsPsych.timelineVariable('Question'),
+      		correct: jsPsych.timelineVariable('Correct'),
+		},
+    	on_finish: function(data){
+        if (data.correct == 'k' && jsPsych.pluginAPI.compareKeys(data.response, 'k') && data.rt > -1) {
+        	data.accurate = true
+        } else if (data.correct == 'k' && jsPsych.pluginAPI.compareKeys(data.response, 'ArrowLeft') && data.rt > -1) {
+        	data.accurate = true
+		} else if (data.correct == 'l' && jsPsych.pluginAPI.compareKeys(data.response, 'l') && data.rt > -1) {
+        	data.accurate = true
+		} else if (data.correct == 'l' && jsPsych.pluginAPI.compareKeys(data.response, 'ArrowRight') && data.rt > -1) {
+        	data.accurate = true
+        } else {
+        	data.accurate = false;
+        	}
+		console.log()
+        }
+    }
+    
+	TrialNow = jsPsych.data.getLastTrialData();
+	
+	var confidence = {
+		type: jsPsychHtmlKeyboardResponse,
+		stimulus: `<p>How sure are you of your response?'</p>
+     		<p style="font-size: 28px;">1 = Very unsure; 2 = Unsure; 3 = Sure; 4 = Very sure</p>`,
+     	choices: ['1','2','3','4'],
+		data: {task: 'Confidence'},
+		on_finish: function(data) {
+			if (data.response == '3'| data.response == '4')
+ 					{data.Conf = 'high'
+ 				} else if (data.response == '1'| data.response == '2')
+ 					{data.Conf = 'low'
+ 				} else 
+ 					{data.Conf = 'No response'
+ 				}	
+			} 
+	}
+
+ 	var feedback = {
+ 		type: jsPsychHtmlKeyboardResponse,
+		trial_duration: 10000,
+ 		stimulus: function(){
+ 			var last_trial_correct = jsPsych.data.get().last(2).values()[0].accurate;
+ 			if (jsPsych.data.get().last(1).values()[0].response == '3'| jsPsych.data.get().last(1).values()[0].response == '4')
+ 					{last_trial_conf = 'high'
+ 				} else if (jsPsych.data.get().last(1).values()[0].response == '1'| jsPsych.data.get().last(1).values()[0].response == '2')
+ 					{last_trial_conf = 'low'
+ 				} else 
+ 					{last_trial_conf = 'No response'
+ 				}		
+ 			if (last_trial_correct){
+ 				return "<p>You were <b>correct</b> and your confidence was <b>"+last_trial_conf+"</b>.</p>" +
+						"<p>Press space to continue</p>";
+
+ 			} else {
+ 				return "<p>You were <b>wrong</b> and your confidence was <b>" +last_trial_conf + "</b>.</p>" +
+					"<p>Press space to continue</p>";
+ 			}
+		},
+	}
+  
+	var test = {
+    	timeline: [fixation, choiceQuestion, confidence],
+    	timeline_variables: teststimuli,
+    	data: {
+    	phase: 'test'
+      	},
+    	randomize_order: true
+	}
+
+	
+	 /*Global rating - end of experiment*/
+    var globalrate2 = {
+        type: jsPsychHtmlSliderResponse,
+        stimulus: `<p>This first task is complete - yay!'</p> 
+        <p>'Before going to the next task, what percentage of the questions do you think you answered correctly?''</p>`,
+		labels: percent_options,
+		min:0,
+		max:100,
+		slider_start:0,
+		require_movement:true,
+		stimulus_duration:5000,
+		response_ends_trial:true
+    }; 
+
+  timeline.push(welcome);
+  timeline.push(globalrate1);
+  timeline.push(instructions);
+  timeline.push(test);
+  timeline.push(globalrate2);
+    
+	var show_data_trial = {
+   		type: jsPsychHtmlKeyboardResponse,
+   		stimulus: function() {
+		var trials = jsPsych.data.get().filter({task:'Response'});
+		console.log(trials);
+		var correct_trials = trials.filter({accurate: true});
+		console.log(correct_trials);
+		var accuracy = Math.round(correct_trials.count() / trials.count() * 100);
+		var confidencetrials = jsPsych.data.get().filter({task:'Confidence'});
+		var hiconftrials = confidencetrials.filter({Conf: "high"});
+		var Hiconfidence = Math.round(hiconftrials.count() / confidencetrials.count() * 100);
+	//	var rt = Math.round(correct_trials.select('rt').mean());
+		return "<p>You completed this task! You responded correctly on " + accuracy + " % of the questions.</p>" +
+       			"<p> You had high confidence on " + Hiconfidence + " % of the questions.</p>" + // <-- Added the missing + here
+       			"<p> Press any button to continue.</p>";
+			},
+     	allow_keys: true,
+    	show_clickable_nav: true
+  	}
+
+  	timeline.push(show_data_trial);
+
+
+  /* start the experiment */
+  /* Changed for JATOS: wrapped jsPsych.init with jatos.onLoad */
+/*  jatos.onLoad(function() {
+    jsPsych.init({
+      timeline: timeline,
+      on_finish: function() {
+      /* Changed for JATOS: submit result data to JATOS and start next component */
+ /*       var resultJson = JSON.stringify(jsPsych.data.getData());
+        jatos.submitResultData(resultJson, jatos.startNextComponent);
+      }
+   /* });
+/*  }); */
+    
+ /* start the experiment */
+	jatos.onLoad(() => {
+  		jsPsych.run(timeline);
+	});	
+
+</script>
+</html>

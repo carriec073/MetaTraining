@@ -1,0 +1,230 @@
+var teststimuli = [
+  {
+    "Question": "A reaction is considered exergonic when it releases energy or requires energy",
+    "OptionA": "Releases energy",
+    "OptionB": "Requires energy",
+    "Correct": "a"
+  },
+  {
+    "Question": "If an allele is recessive, the corresponding phenotype results from defective or insufficient protein",
+    "OptionA": "Insufficient protein",
+    "OptionB": "Defective protein",
+    "Correct": "a"
+  },
+  {
+    "Question": "You have the same set of alleles or genes compared to other humans",
+    "OptionA": "Genes",
+    "OptionB": "Alleles",
+    "Correct": "a"
+  },
+  {
+    "Question": "Following meiosis, the chromosome number in daughter cells is the same or half of parent cells",
+    "OptionA": "Half",
+    "OptionB": "The same",
+    "Correct": "a"
+  },
+  {
+    "Question": "The number of predators affecting the number of herbivores is an example of top down or bottom up control of food web dynamics",
+    "OptionA": "Bottom up",
+    "OptionB": "Top down",
+    "Correct": "l"
+  },
+  {
+    "Question": "Energy or nitrogen flows through an ecosystem",
+    "OptionA": "Nitrogen",
+    "OptionB": "Energy",
+    "Correct": "l"
+  },
+  {
+    "Question": "Random mating leads to an increase or decrease in phenotypic variation",
+    "OptionA": "Decrease",
+    "OptionB": "Increase",
+    "Correct": "l"
+  },
+  {
+    "Question": "Bacterial cells or eukaryotic cells are larger in size",
+    "OptionA": "Bacterial",
+    "OptionB": "Eukaryotic",
+    "Correct": "l"
+  },
+  {
+    "Question": "Most viruses use DNA or RNA for genetic material",
+    "OptionA": "RNA",
+    "OptionB": "DNA",
+    "Correct": "a"
+  },
+  {
+    "Question": "Offspring differ from their parents, even when a trait is heritable, because recombination of: chromosomes or alleles",
+    "OptionA": "Chromosomes",
+    "OptionB": "Alleles",
+    "Correct": "l"
+  },
+  {
+    "Question": "Mice evolved into or share a common ancestor with humans",
+    "OptionA": "Share",
+    "OptionB": "Evolved into",
+    "Correct": "a"
+  },
+  {
+    "Question": "The dark reactions of photosynthesis capture carbon dioxide (CO2) or produce ATP and NADPH",
+    "OptionA": "Capture CO2",
+    "OptionB": "Produce ATP & NADPH",
+    "Correct": "a"
+  },
+  {
+    "Question": "Amphibians or Reptiles emerged most recently in evolutionary time",
+    "OptionA": "Reptiles",
+    "OptionB": "Amphibians",
+    "Correct": "a"
+  },
+  {
+    "Question": "Ribosomes are present in plant or bacteria cells",
+    "OptionA": "Plant",
+    "OptionB": "Bacteria",
+    "Correct": "a"
+  },
+  {
+    "Question": "Fish have a more recent common ancestor with dinosaurs or frogs",
+    "OptionA": "Frogs",
+    "OptionB": "Dinosaurs",
+    "Correct": "a"
+  },
+  {
+    "Question": "After an owl has died and fallen to the ground, decomposers (bacteria and fungi) produce organic carbon or inorganic carbon",
+    "OptionA": "Organic",
+    "OptionB": "Inorganic",
+    "Correct": "l"
+  },
+  {
+    "Question": "Under selective pressure, individuals that have larger, stronger beaks are able to reproduce more or less when large seeds are limited compared to small-beaked finches",
+    "OptionA": "Reproduce more",
+    "OptionB": "Reproduce less",
+    "Correct": "l"
+  },
+  {
+    "Question": "According to the endosymbiotic theory, ribosomes have their own DNA or do not have their own DNA",
+    "OptionA": "Have their own DNA",
+    "OptionB": "Do not have their own DNA",
+    "Correct": "l"
+  },
+  {
+    "Question": "A haploid cell (n) has one set of chromosomes or chromatids",
+    "OptionA": "Chromosomes",
+    "OptionB": "Chromatids",
+    "Correct": "a"
+  },
+  {
+    "Question": "Gametophyte or sporophyte best describes the diploid stage of the plant life cycle",
+    "OptionA": "Gametophyte",
+    "OptionB": "Sporophyte",
+    "Correct": "l"
+  },
+  {
+    "Question": "Photosynthesis or transpiration is a process by which plants release water and O2 to the atmosphere",
+    "OptionA": "Transpiration",
+    "OptionB": "Photosynthesis",
+    "Correct": "a"
+  },
+  {
+    "Question": "Plants respire CO2 or O2",
+    "OptionA": "CO2",
+    "OptionB": "O2",
+    "Correct": "a"
+  },
+  {
+    "Question": "The nucleus replicates when the cell replicates or separately from the rest of the cell",
+    "OptionA": "Separately from the rest of the cell",
+    "OptionB": "When cell replicates",
+    "Correct": "l"
+  },
+  {
+    "Question": "A patient has a genetic disease where their cells are unable to properly construct proteins. Ribosomes or lysosomes are most likely dysfunctional",
+    "OptionA": "Ribosomes",
+    "OptionB": "Lysosomes",
+    "Correct": "a"
+  },
+  {
+    "Question": "A single kidney cell from a male, assuming that no mutations have occurred, would have the same or different DNA content as a sperm cell",
+    "OptionA": "The same DNA",
+    "OptionB": "Different DNA",
+    "Correct": "l"
+  },
+  {
+    "Question": "When a maple tree loses 10 pounds over the course of winter those 10 pounds end up primarily turning into heat that exits the tree or turning into CO2 that exits the tree",
+    "OptionA": "Turning into heat",
+    "OptionB": "Turning into CO2",
+    "Correct": "l"
+  },
+  {
+    "Question": "In summer, the amount of CO2 in the air would decrease or increase",
+    "OptionA": "Decrease",
+    "OptionB": "Increase",
+    "Correct": "a"
+  },
+  {
+    "Question": "Gene flow or genetic drift can result in a zone of hybrid species",
+    "OptionA": "Gene flow",
+    "OptionB": "Genetic drift",
+    "Correct": "a"
+  },
+  {
+    "Question": "Offspring differ from their parents because of crossing over and exchange of: alleles or genes",
+    "OptionA": "Genes",
+    "OptionB": "Alleles",
+    "Correct": "l"
+  },
+  {
+    "Question": "Populations of organisms adapt or acclimate to environmental conditions",
+    "OptionA": "Acclimate",
+    "OptionB": "Adapt",
+    "Correct": "l"
+  },
+  {
+    "Question": "What color of light is most absorbed by chlorophyll pigments during photosynthesis? Green or Blue",
+    "OptionA": "Blue",
+    "OptionB": "Green",
+    "Correct": "l"
+  },
+  {
+    "Question": "The amount of CO2 in the atmosphere in the northern hemisphere is high in the winter because of photosynthesis or respiration",
+    "OptionA": "Photosynthesis",
+    "OptionB": "Respiration",
+    "Correct": "l"
+  },
+  {
+    "Question": "Phylogenetic trees represent extant species at nodes or tips",
+    "OptionA": "Nodes",
+    "OptionB": "Tips",
+    "Correct": "l"
+  },
+  {
+    "Question": "Organisms at the bottom of a food web have more or less stored energy than organisms higher in the food web",
+    "OptionA": "More",
+    "OptionB": "Less",
+    "Correct": "a"
+  },
+  {
+    "Question": "When a plant grows, the increase in water biomass is because of absorption of water molecules from the soil or the air",
+    "OptionA": "The air",
+    "OptionB": "The soil",
+    "Correct": "l"
+  },
+  {
+    "Question": "Except for yeast, most fungi exist as multicellular or unicellular organisms",
+    "OptionA": "Unicellular",
+    "OptionB": "Multicellular",
+    "Correct": "l"
+  },
+  {
+    "Question": "During G or S phase of the cell cycle, cells grow and increase the number of organelles",
+    "OptionA": "G phase",
+    "OptionB": "S Phase",
+    "Correct": "a"
+  },
+  {
+    "Question": "Traits on multiple branches of a phylogenetic trees represent convergent evolution or divergent evolution",
+    "OptionA": "Divergent",
+    "OptionB": "Convergent",
+    "Correct": "l"
+  }
+]
