@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <script src="dot-density-metacognition/libs/snap.svg-min.js"></script>
+    <script src="dot-density-metacognition/libs/jquery-3.1.1.min.js"></script>
+    <script src="jatos.js"></script>
+    <link rel="stylesheet" type="text/css" href="dot-density-metacognition/css/experiment.css" />
+    <link rel="stylesheet" href="dot-density-metacognition/libs/pure-release-0.6.0/pure-min.css">
+    <meta name="viewport"
+        content="user-scalable=no, initial-scale=1, maximum-scale=1, minimum-scale=1, width=device-width" />
+</head>
+
+<body>
+    <div id="IDInput">
+        <form class="pure-form" id="login-form">
+            <fieldset>
+                <legend style="color: white">Task 2</legend>
+                <label for="ID" style="color: white">Please enter your ID number:</label><br><br>
+                <input id="ID" type="text" name="ID" autocomplete="off" required><br><br>
+                <button type="submit" class="pure-button pure-button-primary">Submit</button>
+            </fieldset>
+        </form>
+    </div>
+    <div id="trial-container">
+        <p>In this task, you will see two circles with dots inside them <br> and you will be asked to judge which circle has more dots.</p>
+        <p>What percentage of your responses do you think will be accurate?</p>
+        <input type="range" id="slider" min="0" max="100" value="0" step="10">
+        <div class="slider-labels" id="labels"></div>
+        
+        <br>
+        <button id="continue-btn" class="pure-button" disabled>Continue</button>
+    </div>
+    <div id="start" class="is-center">
+        <p>
+            You will see two circles each containing a group of dots, shown very briefly. <br>
+            When prompted, use the arrow keys (&larr;, &rarr;) to indicate which of the circles you think
+            contained the largest number of dots. <br>
+            Immediately afterwards, rate your confidence in that your answer was correct from 1 (very unsure) to
+            4 (very sure). <br>
+            The task is difficult! You will likely make mistakes, that is to be expected. <br>
+            Click on the Start button below to begin.
+        </p>
+        <button class="pure-button pure-button-primary">Start</button>
+    </div>
+    </div>
+    <div id="container">
+        <svg id="svg"></svg>
+        <div id="overlay">
+            <div id="discrimination-question">
+                Which has more dots?<br>Press<br>
+                <span id="left-arrow" class="key">&larr;</span> or <span id="right-arrow" class="key">&rarr;</span>
+            </div>
+            <div id="confidence-question">
+                How sure are you?<br>Press<br>
+                <span id="confidence1" class="key">1 - Very unsure</span>
+                <span id="confidence2" class="key">2 - Unsure</span>
+                <span id="confidence3" class="key">3 - Sure</span>
+                <span id="confidence4" class="key">4 -Very sure</span>
+            </div>
+        </div>
+    </div>
+    <div id="post-trial-container">
+        <p>This task is finished.</p>
+        <p>What percentage of your responses do you think were accurate?</p>
+        <input type="range" id="post-slider" min="0" max="100" value="0" step="10">
+        <div class="slider-labels" id="post-labels"></div>
+        
+        <br>
+        <button id="post-continue-btn" class="pure-button" disabled>Continue</button>
+    </div>
+    <div id="end" class="is-center">
+        <p>That's it for this task. Well done! Click on End to submit your data.</p>
+        <button class="pure-button">End</button>
+    </div>
+
+
+<script>
+    const win_width = $(window).width();
+    const win_height = $(window).height();
+    const show_dot_nums = false;
+    const r_dot = 10;
+    const r_circle = win_width * 0.2;
+    const stroke_width_circle = 5;
+    const r_dot_max = r_circle - r_dot - stroke_width_circle / 2;
+
+    var dots_num_fixed;
+    var dots_step_delta;
+    var dots_min_delta;
+    var dots_max_delta;
+    var dots_current_delta;
+
+    var last_answer_flag = false;
+    var result_data = [];
+
+    var snap = Snap("#svg");
+    $("#svg, #container, #overlay").width(win_width).height(win_height);
+
+    jatos.onLoad(() => {
+        // Use optional chaining and nullish coalescing to prevent crashes if JSON is missing
+        const input = jatos.componentJsonInput || {};
+        const dots = input.dots || {};
+
+        dots_num_fixed = dots.num_fixed ?? 50;
+        dots_step_delta = dots.step_delta ?? 20;
+        dots_min_delta = dots.min_delta ?? 1;
+        dots_max_delta = dots.max_delta ?? 40;
+        dots_current_delta = dots.start_delta ?? 20;
+
+        const percent_options = ['0%', '10%', '20%', '30%', '40%', '50%', '60%', '70%', '80%', '90%', '100%'];
+        percent_options.forEach(val => {
+            $("#labels, #post-labels").append(`<span>${val}</span>`);
+        });
+
+        // 1. ID Submission
+        $("#login-form").submit(function(e) {
+            e.preventDefault();
+            result_data.push({ participantID: $("#ID").val() });
+            $("#IDInput").hide();
+            $("#trial-container").css("display", "flex");
+        });
+
+        // 2. Pre-Slider
+        $("#slider").on("input", () => $("#continue-btn").prop("disabled", false));
+        $("#continue-btn").click(function() {
+            result_data.push({ pre_task_estimate: $("#slider").val() });
+            $("#trial-container").hide();
+            
+            if (isDesktop()) {
+                $("#start").show();
+            } else {
+                $("#start p").text("This experiment can only run on a desktop computer.");
+                $("#start button").hide();
+                $("#start").show();
+            }
+        });
+
+        // 3. Start Button
+        $("#start button").click(() => {
+            $("#start").hide();
+            $("#container").show();
+            run();
+        });
+
+        // 4. Post-Slider
+        $("#post-slider").on("input", () => $("#post-continue-btn").prop("disabled", false));
+        $("#post-continue-btn").click(function() {
+            result_data.push({ post_task_estimate: $("#post-slider").val() });
+            $("#post-trial-container").hide();
+        });
+
+        jatos.addAbortButton();
+    });
+
+    async function run() {
+        // Fallback to 10 trials if jatos.componentJsonInput.num_of_trials is missing
+        const totalTrials = jatos.componentJsonInput?.num_of_trials ?? 120;
+        
+        for (let i = 0; i < totalTrials; i++) {
+            var dots_num_variable = dots_num_fixed + dots_current_delta;
+            var r = Math.random() >= 0.5;
+            var dots_num_left = r ? dots_num_fixed : dots_num_variable;
+            var dots_num_right = r ? dots_num_variable : dots_num_fixed;
+
+            var result = await runTrial(dots_num_left, dots_num_right);
+            result_data.push(result);
+            calcStairCase(result);
+        }
+
+        // --- Transition to Post-Trial Slider ---
+        snap.clear();
+        $("#container").hide(); 
+        $("#post-trial-container").show();
+        
+        // Final submission logic inside the run sequence
+        $("#post-continue-btn").off('click').click(() => {
+            result_data.push({ post_task_estimate: $("#post-slider").val() });
+            $("#post-trial-container").hide();
+            $("#end").show();
+        });
+
+        $("#end button").off('click').click(() => {
+            jatos.submitResultData(result_data, jatos.startNextComponent);
+        });
+    }
+
+    function calcStairCase(result) {
+        if (result.discrimination_is_correct && last_answer_flag) {
+            if (dots_current_delta - dots_step_delta >= dots_min_delta) dots_current_delta -= dots_step_delta;
+            last_answer_flag = false;
+        } else if (result.discrimination_is_correct && !last_answer_flag) {
+            last_answer_flag = true;
+        } else if (!result.discrimination_is_correct) {
+            if (dots_current_delta + dots_step_delta <= dots_max_delta) dots_current_delta += dots_step_delta;
+            last_answer_flag = false;
+        }
+    }
+
+    async function runTrial(dots_num_left, dots_num_right) {
+        drawCirclesDotsAndCross(dots_num_left, dots_num_right);
+        var t0 = performance.now();
+        
+        // Fallback sleep time if not defined in JATOS
+        const sleepTime = jatos.componentJsonInput?.sleep_after_drawing ?? 500;
+        await sleep(sleepTime);
+        
+        drawCirclesAndCross(dots_num_left, dots_num_right);
+        var t_offset = performance.now() - t0;
+        var correct_answer = dots_num_left > dots_num_right ? "left" : "right";
+        
+        var discrimination = await askDiscriminationQuestion(t0, correct_answer);
+        var confidence = await askConfidenceQuestion(t0);
+        
+        var result = { t0, t_offset, dots_num_left, dots_num_right };
+        Object.assign(result, discrimination);
+        Object.assign(result, confidence);
+        return result;
+    }
+
+        function askDiscriminationQuestion(t0, correct_answer) {
+            $("#discrimination-question").show();
+            var discrimination_t_onset = performance.now() - t0;
+            var key, discrimination_t_keydown;
+            function keydown(resolve) {
+                $(document).on('keydown', function (event) {
+                    var keycode = (event.keyCode ? event.keyCode : event.which);
+                    switch (keycode) {
+                        case 37: key = "left"; $("#left-arrow").addClass('gray'); break;
+                        case 39: key = "right"; $("#right-arrow").addClass('gray'); break;
+                    }
+                    if (key) {
+                        discrimination_t_keydown = performance.now() - t0;
+                        $(document).off('keydown');
+                        keyup(resolve);
+                    }
+                });
+            }
+            function keyup(resolve) {
+                $(document).keyup(async function (event) {
+                    var keycode = (event.keyCode ? event.keyCode : event.which);
+                    if (keycode == 37 || keycode == 39) {
+                        $(document).off('keyup');
+                        await sleep(150);
+                        $(".key").removeClass('gray');
+                        $("#discrimination-question").hide();
+                        var discrimination_is_correct = correct_answer == key;
+                        resolve({ discrimination_is_correct, discrimination_t_onset, discrimination_t_keydown });
+                    }
+                });
+            }
+            return new Promise(keydown);
+        }
+
+        function askConfidenceQuestion(t0) {
+            $("#confidence-question").show();
+            var confidence_t_onset = performance.now() - t0;
+            var confidence_key, confidence_t_keydown;
+            function keydown(resolve) {
+                $(document).on('keydown', function (event) {
+                    var keycode = (event.keyCode ? event.keyCode : event.which);
+                    if (keycode >= 49 && keycode <= 52) {
+                        confidence_key = keycode - 48;
+                        $(`#confidence${confidence_key}`).addClass('gray');
+                        confidence_t_keydown = performance.now() - t0;
+                        $(document).off('keydown');
+                        keyup(resolve);
+                    }
+                });
+            }
+            function keyup(resolve) {
+                $(document).keyup(async function (event) {
+                    var keycode = (event.keyCode ? event.keyCode : event.which);
+                    if (keycode >= 49 && keycode <= 52) {
+                        $(document).off('keyup');
+                        await sleep(500);
+                        $(".key").removeClass('gray');
+                        $("#confidence-question").hide();
+                        resolve({ confidence_key, confidence_t_onset, confidence_t_keydown });
+                    }
+                });
+            }
+            return new Promise(keydown);
+        }
+
+        function drawCirclesAndCross(dots_num_left, dots_num_right) {
+            snap.clear();
+            drawCircle(win_width * 0.25, win_height / 2, r_circle);
+            drawCircle(win_width * 0.75, win_height / 2, r_circle);
+            if (show_dot_nums) drawDotNums(dots_num_left, dots_num_right);
+            drawCross(win_width / 2, win_height / 2);
+        }
+
+        function drawCirclesDotsAndCross(dots_num_left, dots_num_right) {
+            snap.clear();
+            drawCircle(win_width * 0.25, win_height / 2, r_circle);
+            drawCircle(win_width * 0.75, win_height / 2, r_circle);
+            drawDots(win_width * 0.25, win_height / 2, dots_num_left, r_dot_max);
+            drawDots(win_width * 0.75, win_height / 2, dots_num_right, r_dot_max);
+            if (show_dot_nums) drawDotNums(dots_num_left, dots_num_right);
+            drawCross(win_width / 2, win_height / 2);
+        }
+
+        function drawCircle(x, y, r) {
+            var dish = snap.circle(x, y, r);
+            dish.attr({ fill: "#000", stroke: "#fff", strokeWidth: stroke_width_circle });
+        }
+
+        function drawCross(x, y) {
+            snap.line(x, y - 20, x, y + 20).attr({ stroke: "#fff", strokeWidth: 1 });
+            snap.line(x - 20, y, x + 20, y).attr({ stroke: "#fff", strokeWidth: 1 });
+        }
+
+        function drawDotNums(dots_num_left, dots_num_right) {
+            snap.text(50, 50, dots_num_left + " " + dots_num_right).attr({ "font-size": 20, fill: "#fff" });
+        }
+
+        function drawDots(x, y, dot_num, r_max) {
+            var dot_coords = calcDotCoords(dot_num, r_max);
+            for (const c of dot_coords) {
+                snap.circle(c.x + x, c.y + y, r_dot).attr({ fill: "#fff", strokeWidth: 0 });
+            }
+        }
+
+        function calcDotCoords(num, r_max) {
+            var dot_coords = [];
+            while (dot_coords.length < num) {
+                var r = r_max * Math.sqrt(Math.random());
+                var theta = Math.random() * 2 * Math.PI;
+                var x = r * Math.cos(theta);
+                var y = r * Math.sin(theta);
+                if (!checkDotOverlap(dot_coords, x, y)) {
+                    dot_coords.push({ x, y });
+                }
+            }
+            return dot_coords;
+        }
+
+        function checkDotOverlap(dot_coords, x, y) {
+            for (const c of dot_coords) {
+                if (Math.abs(c.x - x) < (r_dot * 2) && Math.abs(c.y - y) < (r_dot * 2)) return true;
+            }
+            return false;
+        }
+
+        function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+        function isDesktop() {
+            const navigatorAgent = navigator.userAgent || navigator.vendor || window.opera;
+            return !(/(android|bb\d+|meego).+mobile|avantgo|bada\/|blackberry|blazer|compal|elaine|fennec|hiptop|iemobile|ip(hone|od)|iris|kindle|lge |maemo|midp|mmp|mobile.+firefox|netfront|opera m(ob|in)i|palm( os)?|phone|p(ixi|re)\/|plucker|pocket|psp|series([46])0|symbian|treo|up\.(browser|link)|vodafone|wap|windows ce|xda|xiino|android|ipad|playbook|silk/i.test(navigatorAgent));
+        }
+    </script>
+</body>
