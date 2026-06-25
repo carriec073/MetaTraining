@@ -1,0 +1,72 @@
+<!doctype html>
+<!-- Example taken from http://http://www.factorsdb.org/ and adapted for use with JATOS-->
+<html>
+
+<head>
+  <title>Debrief</title>
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.11.3/jquery.min.js"></script>
+  <script src="jspsych/jspsych.js"></script>
+  <script src="BioQuestions/jspsych/plugin-html-keyboard-response.js"></script>
+  <script src="jatos.js"></script>
+  <link rel="stylesheet" href="BioQuestions/jspsych/jspsych.css">
+  <style> 
+    .jspsych-display-element {
+      font-size: 24px;
+    }
+  </style>
+</head>
+<body>
+  <div id="jspsych-target"></div>
+</body>
+<script>
+
+	/* Initialize JSPsych*/
+	var jsPsych = initJsPsych({
+  		on_trial_start: jatos.addAbortButton,
+  		on_finish: () => 
+		  jatos.endStudy(true, "Complete")
+	});
+    
+  /* create the experiment timeline */
+  	var timeline = [];
+
+  /* instructions */
+  	var Goodbye = {
+    	type: jsPsychHtmlKeyboardResponse,
+    	stimulus: `<p>Thank you for participating in this research project. You will recieve your
+				$40 virtual gift card by email within a couple of days.</p>
+				<p> The true purpose of this project is to determine whether we can train students
+				to self-assess their own performance more effectively. In order to test this, we tried
+				to motivate students by offering them an incentive based on their performance.
+				However, we actually will pay all students the same amount of $40 in electronic gift cards
+				for each session of the study they complete ($80 total if you complete both sessions). </p>
+				<p>Sometimes in research it is necessary not to tell the participants the true purpose of the
+				experiment as it might affect our results. If we tell people the purpose of the experiment
+				or how we predict people will act in the experiment, they may deliberately do whatever it is they
+				think we want them to, just to help us out and give us the results that they want. Or, it is
+				also possible that the opposite might occur. That is, if we tell people our predictions, they might
+				deliberately act in the opposite direction to show us that we can’t figure them out.
+				There are also times where people behave differently subconsciously, meaning they didn’t purposely
+				or intentionally change their behavior. Regardless of how this happens, we would not have a
+				good indication of how they would act in this situation in everyday life.</p>
+				<p> Please do not disclose research procedures and/or the purpose to anyone who might participate
+				in this study in the future as this could affect the results of the study.</p>
+				<p>If you have any questions, please feel free to contact Carrie Clark (cclark4@unl.edu) or
+				Joseph Dauer (joseph.dauer@unl.edu). If you would like to discuss the project with someone
+				other than the investigator, please feel free to contact the UNL Institutional Review Board (IRB):<br>
+· 				Phone: 1(402)472-6965 <br>
+· 				Email: irb@unl.edu <br>
+				Thank you for your participation. Your responses are valuable to the research. Click any key to end the study.</p>`,
+    	allow_keys: true,
+    	show_clickable_nav: true
+  	};
+  
+	timeline.push(Goodbye);
+
+ /* start the experiment */
+	jatos.onLoad(() => {
+  		jsPsych.run(timeline);
+	});	
+
+</script>
+</html>
