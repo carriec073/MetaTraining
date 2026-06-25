@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+
+<html>
+<head>
+<link rel="stylesheet" href="Video/css/video_example_study.css" />
+<script src="Video/libs/jquery-1.11.1.min.js"></script>
+<script src="jatos.js"></script>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+</head>
+
+<body>
+	<div id="component">
+		<p id="error"></p>
+		<p id="text">Now watch this 10-minute video lecture. Press play on the video to start</p>
+		<video id="perceptionvideo" width="640" height="420" controls poster="Video/videos/poster.png">
+			<source src="Video/videos/Perception-v1.mp4" type='video/mp4' />
+		</video>
+		<p id="nextComponent">Press N when video is finished</p>
+	</div>
+
+	<script>
+		// What todo when jatos.js is finished initializing
+		jatos.onLoad(function() {
+			// Wait for key press and start next component
+			$(document).keydown(function(event) {
+				var keycode = (event.keyCode ? event.keyCode
+						: event.which);
+				if (keycode == '78') {
+					jatos.endStudyAndRedirect("https://unlcorexmuw.qualtrics.com/jfe/form/SV_3QX1Q5wdOXAQWCa", true, 'Complete');
+				}
+			});
+
+			jatos.addAbortButton();
+		});
+	</script>
+</body>
+</html>
