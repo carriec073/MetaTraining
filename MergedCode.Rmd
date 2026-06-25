@@ -1,0 +1,1925 @@
+---
+title: "PrelimMetaTrainAnalyses"
+author: "Carrie"
+date: "2025-06-10"
+output:
+  html_document: 
+    toc: true
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+
+#---Import libraries etc. (Note, you'll need to install metaSDT if not installed already)
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(lme4)
+library(ltm)
+library(psych)
+library(jquerylib)
+library(dplyr)
+library(corrplot)
+library(psych)
+library(vtable)
+#upload required libraries to calculate meta-d'
+library(tidyverse)
+library(magrittr)
+library(reshape2)
+library(rjags)
+library(coda)
+library(lattice)
+library(broom)
+library(ggpubr)
+library(ggmcmc)
+library(here)
+library(metaSDT)
+library(ggplot2)
+library(cowplot)
+library(statConfR)
+library(lmerTest)
+library(emmeans)
+```
+
+##############---Cleaning and creating datasets##################################
+
+#---Read bio data
+```{r}
+Bio_9June25 <- read.csv("Bio_Feb26.csv", colClasses=c("accurate"="logical"))
+```
+#---Look for weird RTs 
+```{r}
+describe(Bio_9June25)
+```
+
+#---Create some variables - These are just to look at over and under-confidence rates
+```{r}
+Bio_9June25$acc <- ifelse(Bio_9June25$accurate == "TRUE", 1, ifelse(Bio_9June25$accurate == "FALSE", 0, NA)) 
+Bio_9June25$OverConf <- ifelse(Bio_9June25$accurate == "FALSE" & Bio_9June25$ConfResp > 2, 1, 
+                        ifelse(Bio_9June25$accurate == "FALSE" & Bio_9June25$ConfResp < 3, 0,
+                        ifelse(Bio_9June25$accurate == "TRUE", 0, NA))) 
+Bio_9June25$UnderConf <- ifelse(Bio_9June25$accurate == "TRUE" & Bio_9June25$ConfResp < 3, 1, 
+                        ifelse(Bio_9June25$accurate == "TRUE" & Bio_9June25$ConfResp > 2, 0,
+                        ifelse(Bio_9June25$accurate == "FALSE", 0, NA))) 
+```
+
+##--- Making some plots to inspect dependant variables
+```{r}
+boxplot(Bio_9June25$CorrTrialRT)
+boxplot(Bio_9June25$ConfRT)
+ggplot(Bio_9June25) + geom_bar(mapping = aes(x = acc, y = ..prop.., group =1), stat = "count")
+ggplot(Bio_9June25) + geom_bar(mapping = aes(x = ConfResp, y = ..prop.., group=1), stat = "count")
+ggplot(Bio_9June25) + geom_bar(mapping = aes(x = OverConf, y = ..prop.., group=1), stat = "count")
+ggplot(Bio_9June25) + geom_bar(mapping = aes(x = UnderConf, y = ..prop.., group=1), stat = "count")
+```
+
+#---Trimming reaction times
+#RTs range from .016 to 25s. Given the complexity of the questions, 25secs #doesn't seem too unreasonable. I'll take out anything below .05 secs. Conf RT #has an outlier that I'll remove. After removing, there are still some very long ConfRT times in there that I'll leave in for now. 
+```{r}
+Bio_9June25$TrialRT[Bio_9June25$TrialRT < 50] <- NA
+Bio_9June25$TrialRT[Bio_9June25$TrialRT > 26000] <- NA
+Bio_9June25$ConfRT[Bio_9June25$ConfRT > 26000] <- NA
+Bio_9June25$ConfRT[Bio_9June25$ConfRT < 10] <- NA
+```
+
+#---Sort cases
+```{r}
+Bio_9June25[order(Bio_9June25$ID, Bio_9June25$study_result, Bio_9June25$Timepoint, Bio_9June25$Trial), ]
+```
+
+
+#---Create ROC curves to calculate AROC2
+#---Code from Marco Gandolfo https://sites.google.com/view/marcogandolfo/resources/R/auroc2r-metacognitive-sensitivity
+```{r}
+auroc2R <- function(correct, conf, Nratings) {
+# Calculate area under type 2 ROC
+# correct - vector of 1 x ntrials, 0 for error, 1 for correct
+# conf - vector of 1 x ntrials of confidence ratings taking values 1:Nratings
+# Nratings - how many confidence levels available
+
+i <- Nratings+1
+H2 <- c()
+FA2 <- c()
+for (c in 1:Nratings){
+H2[i-1] <- length(which(conf == c & correct == 1)) + 0.5
+FA2[i-1] <- length(which(conf == c & correct == 0)) + 0.5
+i <- i-1
+}
+
+H2 <- H2/sum(H2);
+FA2 <- FA2/sum(FA2)
+cum_H2 <- c(0, cumsum(H2))
+cum_FA2 <- c(0, cumsum(FA2))
+
+i <- 1
+k <- c()
+for(c in 1:Nratings){
+k[i] <- (cum_H2[c+1] - cum_FA2[c])^2 - (cum_H2[c] - cum_FA2[c+1])^2
+i <- i+1
+}
+auroc2 <- 0.5 + 0.25*sum(k)
+
+return(auroc2)
+
+}
+
+AUROC2ByID <- Bio_9June25 %>%
+  group_by(ID, Timepoint) %>%
+    dplyr::summarise(
+    auroc2 <- auroc2R(CorResp, ConfResp, 4)
+    ) %>%
+
+ungroup() # Optional: remove the grouping structure
+print(AUROC2ByID)
+
+```
+
+
+#---Calculate B-ROC
+#---see Boldt and Yeung for details about BROC. Coding assistance from Claude
+```{r}
+calc_broc <- function(conf, acc, threshold = 3) {
+  # Split confidence ratings based on accuracy
+  correct_conf <- conf[acc == 1]
+  incorrect_conf <- conf[acc == 0]
+  
+  # Calculate Type 2 Hit Rate (H2) and False Alarm Rate (F2)
+  h2 <- mean(correct_conf >= threshold, na.rm = TRUE)
+  f2 <- mean(incorrect_conf >= threshold, na.rm = TRUE)
+  
+  # Standard B''D / B-ROC formula
+  num <- (h2 * (1 - h2)) - (f2 * (1 - f2))
+  den <- (h2 * (1 - h2)) + (f2 * (1 - f2))
+  
+  if (is.na(den) || den == 0) return(0)
+  return(num / den)
+}
+
+calc_area_bias_safe <- function(conf, acc, threshold = 3) {
+  corr_trials <- conf[acc == 1]
+  incorr_trials <- conf[acc == 0]
+  
+  n_corr <- length(corr_trials)
+  n_incorr <- length(incorr_trials)
+  
+  # Counts of 'High Confidence'
+  h_count <- sum(corr_trials >= threshold, na.rm = TRUE)
+  f_count <- sum(incorr_trials >= threshold, na.rm = TRUE)
+  
+  # Apply log-correction (add 0.5 to hits, 1 to total)
+  # This prevents h or f from being exactly 0 or 1
+  h <- (h_count + 0.5) / (n_corr + 1)
+  f <- (f_count + 0.5) / (n_incorr + 1)
+  
+  # Calculate K'A (Area to the left)
+  ka_num <- h + f + (f / (1 - f))
+  ka <- ((h - f) * ka_num) / 4
+  
+  # Calculate K'B (Area to the right)
+  kb_num <- 2 - (h + f) + (h / (1 - h))
+  kb <- ((h - f) * kb_num) / 4
+  
+  # Calculate ln(Beta'K)
+  # Result is symmetric: 0 is neutral, negative is liberal, positive is conservative
+  beta_k <- ka / kb
+  return(log(beta_k))
+}
+
+#Apply the function for BROC
+BROCRByID <- Bio_9June25 %>%
+  group_by(ID, Timepoint) %>%
+  summarise(
+    BROC = calc_broc(ConfResp, acc, threshold = 3)
+  ) %>%
+  ungroup()
+
+print(BROCRByID)
+```
+#Case 1240 got really low accuracy on the dots task so exclude case
+```{r}
+Bio_9June25 <- subset(Bio_9June25, ID != 1240)
+```
+
+#---Export the stacked data with the removed RTs
+```{r}
+#write.csv(Bio_9June25, "Bio_CleanStacked_Feb26.csv", row.names = TRUE)
+```
+
+
+#---Create a flat data set from this stacked version
+```{r}
+BioAgg <- Bio_9June25 %>%
+  # Select the columns needed for the initial merge to avoid duplicate rows later
+  distinct(ID, Timepoint, Group, study_result) %>%
+  # Join with the aggregated data
+  left_join(Bio_9June25 %>%
+              # Group by the specified columns
+              group_by(ID, Timepoint, study_result) %>%
+              # Perform the aggregations
+              summarise(
+                CorResp = sum(CorResp, na.rm = TRUE),
+                TrialRT = mean(TrialRT, na.rm = TRUE),
+                CorrTrialRT = mean(CorrTrialRT, na.rm = TRUE),
+                ConfRT = mean(ConfRT, na.rm = TRUE),
+                ConfResp = mean(ConfResp, na.rm = TRUE),
+                AccChc = sum(acc, na.rm = TRUE),
+                OverConf = sum(OverConf, na.rm = TRUE),
+                UnderConf = sum(UnderConf, na.rm = TRUE),
+                PreConf = first(pre_task_estimate),
+                PostConf = first(post_task_estimate)
+              ),
+            by = c("ID", "Timepoint", "study_result"))
+```
+#---Check for dups. Should have a maximum of 2 sessions
+```{r}
+BioAgg %>% group_by(ID) %>% summarize(n()) 
+```
+
+#---Merge in AUROC2 & B-ROC
+```{r}
+BioAgg <- left_join(BioAgg, AUROC2ByID, by = c("ID", "Timepoint"))
+BioAgg <- left_join(BioAgg, BROCRByID, by = c("ID", "Timepoint"))
+```
+
+```{r}
+colnames(BioAgg)[15] <- 'AUROC2'
+colnames(BioAgg)[16] <- 'BROC'
+```
+
+#Create Proportionate Acc Variable
+```{r}
+BioAgg$BioPropAcc <- (BioAgg$AccChc/38)*100
+```
+
+
+####---Calucate individual M ratios####
+#---Skip to Line 406 to load the calculated participant meta-d' data
+# For Bio_CleanStacked_Feb26.csv, you need ID, S1 (1 means the correct answer was left),
+# CorResp (accuracy, 1=accurate), ConfResp (their confidence rating).
+
+```{r}
+bio_formatted <- Bio_9June25 %>%
+  dplyr::select(ID, Group, Timepoint, S1, CorResp, ConfResp) %>%
+  rename(
+    participant = ID,
+    stimulus    = S1,
+    correct     = CorResp,
+    rating      = ConfResp
+  ) %>%
+  mutate(
+    stimulus  = as.factor(stimulus),
+    rating    = as.factor(rating),
+    correct  = as.integer(correct),
+    format    = "bio"
+  ) %>%
+  na.omit()
+```
+
+# ---fit meta-d' for one participant x timepoint x format block.
+# you don't have to re-fit, as the files are included in this folder
+# Returns NA for all SDT (signal detection theory) columns when too few trials or fit fails.
+
+```{r}
+fit_individual_metad <- function(data_block, participant_id, group, fmt, tp) {
+
+  n_correct <- sum(data_block$correct == 1, na.rm = TRUE)
+  n_errors  <- sum(data_block$correct == 0, na.rm = TRUE)
+
+  # Base result with NAs — built as list, converted to tibble at return
+  make_result <- function(dp = NA_real_, bias = NA_real_,
+                          md = NA_real_, mr = NA_real_) {
+    tibble(
+      participant = participant_id,
+      Group       = group,
+      format      = fmt,
+      timepoint   = tp,
+      n_correct   = n_correct,
+      n_errors    = n_errors,
+      dprime      = dp,
+      c           = bias,
+      meta_d      = md,
+      M_ratio     = mr
+    )
+  }
+  
+     # Need at least 5 correct and 5 error trials for meta-d' to be identifiable
+  if (is.na(n_correct) || is.na(n_errors) || n_correct < 5 || n_errors < 5) {
+    return(make_result())
+  }
+  # Exclude participants performing at or below chance via one-tailed binomial test.
+  # binom.test tests whether accuracy > 0.5 (chance); p > 0.05 means we cannot
+  # conclude performance is above chance, so we exclude.
+  n_total  <- n_correct + n_errors
+  binom_p  <- binom.test(n_correct, n_total, p = 0.5, alternative = "greater")$p.value
+  if (binom_p > 0.05) {
+    return(make_result())
+  }
+
+  fit <- tryCatch(
+    suppressWarnings(
+      fitMetaDprime(data = data_block, model = "ML")
+    ),
+    error = function(e) NULL
+  )
+
+  if (is.null(fit) || nrow(fit) == 0) return(make_result())
+
+  # Diagnose column names if expected columns are missing
+  # I don't think this is necessary any more.
+  expected <- c("dprime", "c", "metaD", "Ratio")
+  missing  <- setdiff(expected, names(fit))
+  if (length(missing) > 0) {
+    warning(sprintf(
+      "fitMetaDprime output missing columns: %s. Actual columns: %s",
+      paste(missing, collapse = ", "),
+      paste(names(fit), collapse = ", ")
+    ))
+    return(make_result())
+  }
+
+  make_result(
+    dp   = as.numeric(fit$dprime[[1]]),
+    bias = as.numeric(fit[["c"]][[1]]),
+    md   = as.numeric(fit$metaD[[1]]),
+    mr   = as.numeric(fit$Ratio[[1]])
+  )
+}
+```
+
+
+
+# ---Apply across every participant x timepoint x format combination
+
+```{r}
+run_individual_fits <- function(formatted_data) {
+  formatted_data %>%
+    group_by(participant, Group, format, Timepoint) %>%
+    group_split() %>%
+    map_dfr(function(block) {
+      fit_individual_metad(
+        data_block     = block,
+        participant_id = unique(block$participant),
+        group          = unique(block$Group),
+        fmt            = unique(block$format),
+        tp             = unique(block$Timepoint)
+      )
+    })
+}
+
+cat("\nFitting individual meta-d' for BIO ...\n")
+bio_individual  <- run_individual_fits(bio_formatted)
+```
+#---save these files for later use
+```{r}
+#write.csv(bio_individual, file = "Individual Metad biology.csv", row.names = FALSE)
+```
+
+
+#---Add the d' and meta-d' scores to full data set 
+```{r}
+MetaDBio <- read.csv("Individual Metad biology.csv")
+```
+
+```{r}
+names(MetaDBio)[names(MetaDBio) == "participant"] <- "ID"
+names(MetaDBio)[names(MetaDBio) == "timepoint"] <- "Timepoint"
+MetaDBio <- dplyr::select(MetaDBio, -Group, -format, -n_correct, -n_errors)
+```
+
+```{r}
+BioAgg <- left_join(BioAgg, MetaDBio, by = c("ID", "Timepoint"))
+```
+
+
+
+#---Collapse by timepoint
+```{r}
+bio_wide <- pivot_wider(data=BioAgg,
+                          id_cols = ID,
+                          names_from=Timepoint,
+                          values_from=c(Group, CorResp, TrialRT, CorrTrialRT, ConfRT, ConfResp, UnderConf, OverConf, PreConf, PostConf, AUROC2,BROC, BioPropAcc, dprime, c, meta_d, M_ratio))
+```
+
+
+#Check for dups
+```{r}
+bio_wide %>% group_by(ID) %>% summarize(n()) 
+```
+
+
+#---Read dots data
+```{r}
+Dots_9June25 <- read.csv("Dots_Feb26.csv", row.names=1) 
+```
+
+#Find the cases who rated 6 for confidence to exclude them
+#We need to take out 1189, 1158 and I'll delete responses with 5 or rest for other occassional cases 
+```{r}
+ExclIDs = which(Dots_9June25$confidence_key == "6", arr.ind = TRUE)
+Dots_9June25[ExclIDs, "ID"]
+```
+
+#Also take out 1240, who had very low accuracy for dots task. 
+```{r}
+Dots_9June25 <- subset(Dots_9June25, ID!= 1189 & ID != 1158 & ID != 1240)
+na_if(Dots_9June25$confidence_key, 5)
+na_if(Dots_9June25$confidence_key, 6)
+```
+
+#Create some variables - Over and under-confidence
+```{r}
+Dots_9June25$OverConf <- ifelse(Dots_9June25$Dots_Accurate == 0 & Dots_9June25$confidence_key > 2, 1, 
+                        ifelse(Dots_9June25$Dots_Accurate == 0 & Dots_9June25$confidence_key < 3, 0,
+                        ifelse(Dots_9June25$Dots_Accurate == 1, 0, NA))) 
+Dots_9June25$UnderConf <- ifelse(Dots_9June25$Dots_Accurate == 1 & Dots_9June25$confidence_key < 3, 1, 
+                        ifelse(Dots_9June25$Dots_Accurate == 1 & Dots_9June25$confidence_key > 2, 0,
+                        ifelse(Dots_9June25$Dots_Accurate == 0, 0, NA)))
+```
+
+#---Plot some variables 
+```{r}
+
+boxplot(Dots_9June25$DotCorTrialRT)
+boxplot(Dots_9June25$DotConfRT)
+ggplot(Dots_9June25) + geom_bar(mapping = aes(x = Dots_Accurate, y = ..prop.., group =1), stat = "count")
+ggplot(Dots_9June25) + geom_bar(mapping = aes(x = confidence_key, y = ..prop.., group=1), stat = "count")
+ggplot(Dots_9June25) + geom_bar(mapping = aes(x = OverConf, y = ..prop.., group=1), stat = "count")
+ggplot(Dots_9June25) + geom_bar(mapping = aes(x = UnderConf, y = ..prop.., group=1), stat = "count")
+```
+
+```{r}
+describe(Dots_9June25)
+```
+
+
+
+#Some massive outliers for RTs. Trimmed to 3secs, which seems reasonable for this task
+```{r}
+Dots_9June25$DotCorTrialRT[Dots_9June25$DotCorTrialRT < 10] <- NA
+Dots_9June25$DotConfRT[Dots_9June25$DotConfRT < 10] <- NA
+Dots_9June25$DotConfRT[Dots_9June25$DotConfRT > 3000] <- NA
+Dots_9June25$DotCorTrialRT[Dots_9June25$DotCorTrialRT > 30000] <- NA
+Dots_9June25$DotTrialRT[Dots_9June25$DotTrialRT > 30000] <- NA
+
+```
+
+#Sort cases
+```{r}
+Dots_9June25[order(Dots_9June25$ID, Dots_9June25$study_result, Dots_9June25$Timepoint), ]
+```
+
+#Export this dataset with clean RTs
+```{r}
+#write.csv(Dots_9June25, "Dots_CleanStacked_Feb26.csv", row.names = TRUE)
+```
+
+#Restructure to wide format
+```{r}
+
+DotsAgg <- Dots_9June25 %>%
+  # Select the columns needed for the initial merge to avoid duplicate rows later
+  distinct(ID, Timepoint, Group, study_result) %>%
+  # Join with the aggregated data
+  left_join(Dots_9June25 %>%
+              # Group by the specified columns
+              group_by(ID, Timepoint, study_result) %>%
+              # Perform the aggregations
+              summarise(
+                DotsAcc = sum(Dots_Accurate, na.rm = TRUE),
+                DotsTrialRT = mean(DotTrialRT, na.rm = TRUE),
+                DotCorTrialRT = mean(DotCorTrialRT, na.rm = TRUE),
+                DotConfRT = mean(DotConfRT, na.rm = TRUE),
+                DotConfResp = mean(confidence_key, na.rm = TRUE),
+                DotOverConf = sum(OverConf, na.rm = TRUE),
+                DotUnderConf = sum(UnderConf, na.rm = TRUE),
+                DotPreConf = first(pre_task_estimate),
+                DotPostConf = first(post_task_estimate)
+              ),
+            by = c("ID", "Timepoint", "study_result"))
+```
+
+
+#Check for dups
+```{r}
+DotsAgg %>% group_by(ID) %>% summarize(n()) 
+```
+
+#Calculate AUROC2
+```{r}
+AUROC2ByID <- Dots_9June25 %>%
+  group_by(ID, Timepoint) %>%
+    summarise(
+    # The inputs to the function (corr and Conf) are now
+    # the vectors belonging to the current group's ID
+    auroc2 <- auroc2R(Dots_Accurate, confidence_key, 4)
+    ) %>%
+
+ungroup()
+print(AUROC2ByID)
+```
+
+#Calculate B-ROC
+```{r}
+
+BROCRByID <- Dots_9June25 %>%
+  group_by(ID, Timepoint) %>%
+  summarise(
+    BROC = calc_broc(confidence_key, Dots_Accurate, threshold = 3)
+  ) %>%
+
+  ungroup()
+print(BROCRByID)
+```
+
+#___Add AURORC2 and BROC to dataset
+
+```{r}
+DotsAgg <- left_join(DotsAgg, AUROC2ByID, by = c("ID", "Timepoint"))
+DotsAgg <- left_join(DotsAgg, BROCRByID, by = c("ID", "Timepoint"))
+```
+
+#____Rename variables
+```{r}
+colnames(DotsAgg)[14] <- 'DotsAUROC2'
+colnames(DotsAgg)[15] <- 'DotsBROC'
+```
+
+
+#---Calculate % accuracy
+```{r}
+DotsAgg$DotsPropAcc <- (DotsAgg$DotsAcc/120)*100
+```
+
+
+#___Calculate individual meta-D
+```{r}
+dots_formatted <- Dots_9June25 %>%
+  dplyr::select(ID, Group, Timepoint, S1, Dots_Accurate, confidence_key) %>%
+  rename(
+    participant = ID,
+    stimulus    = S1,
+    correct     = Dots_Accurate,
+    rating      = confidence_key
+  ) %>%
+  mutate(
+    stimulus  = as.factor(stimulus),
+    rating    = as.factor(rating),
+    correct  = as.integer(correct),
+    format    = "dots"
+  ) %>%
+  na.omit()
+
+cat("\nFitting individual meta-d' for DOTS ...\n")
+dots_individual <- run_individual_fits(dots_formatted)
+```
+
+#Save output
+```{r}
+#write.csv(dots_individual, file = "Individual Metad dots.csv", row.names = FALSE)
+```
+
+#---Add the d' and meta-d' scores
+```{r}
+MetaD <- read.csv("Individual Metad dots.csv")
+```
+
+```{r}
+names(MetaD)[names(MetaD) == "participant"] <- "ID"
+names(MetaD)[names(MetaD) == "timepoint"] <- "Timepoint"
+MetaD <- dplyr::select(MetaD, -Group, -format, -n_correct, -n_errors)
+```
+
+```{r}
+DotsAgg <- left_join(DotsAgg, MetaD, by = c("ID", "Timepoint"))
+```
+
+
+
+#Rename some variables
+```{r}
+names(DotsAgg)[names(DotsAgg) == "dprime"] <- "DotsdPrime"
+names(DotsAgg)[names(DotsAgg) == "c"] <- "Dots_c"
+names(DotsAgg)[names(DotsAgg) == "meta_d"] <- "Dots_MetaD"
+names(DotsAgg)[names(DotsAgg) == "M_ratio"] <- "Dots_MRatio"
+```
+
+#Collapse by timepoint
+```{r}
+dots_wide <- pivot_wider(data=DotsAgg,
+                          id_cols = ID,
+                          names_from=Timepoint,
+                          values_from=c(Group, DotsAcc, DotsTrialRT, DotCorTrialRT, DotConfRT, DotConfResp, DotOverConf, DotPreConf, DotPostConf, DotsAUROC2, DotsBROC, DotsPropAcc, DotsdPrime, Dots_c, Dots_MetaD, Dots_MRatio))
+```
+                          
+
+#Check for dups
+```{r}
+dots_wide %>% group_by(ID) %>% summarize(n()) 
+```
+
+
+#Read in survey data
+```{r}
+Survey <- read.csv("Survey_Feb26.csv", row.names=1)
+```
+
+#Check for dups in survey
+```{r}
+Survey %>% group_by(ID) %>% summarize(n()) 
+```
+
+
+#Recode for new variables
+```{r}
+Survey <- Survey %>% mutate(Race_1 = ifelse(is.na(Race_1), 0, Race_1))
+Survey <- Survey %>% mutate(Race_2 = ifelse(is.na(Race_2), 0, Race_2))
+Survey <- Survey %>% mutate(Race_3 = ifelse(is.na(Race_3), 0, Race_3))
+Survey <- Survey %>% mutate(Race_4 = ifelse(is.na(Race_4), 0, Race_4))
+Survey <- Survey %>% mutate(Race_5 = ifelse(is.na(Race_5), 0, Race_5))
+Survey <- Survey %>% mutate(Race_6 = ifelse(is.na(Race_6), 0, Race_6))
+Survey <- Survey %>% mutate(Race_7 = ifelse(is.na(Race_7), 0, Race_7))
+race_cols <- c("Race_1", "Race_2", "Race_3", "Race_4", "Race_5", "Race_6", "Race_7")
+Survey$RaceEth <- max.col(Survey[, race_cols], "first")
+Survey$RaceEth[rowSums(Survey[, race_cols]) == 0] <- NA # Set to NA if all are 0
+```
+
+```{r}
+RaceEth_table <- table(Survey$RaceEth)
+print(Survey$RaceEth)
+```
+
+#Recode age
+
+```{r}
+Survey$age_yr <- Survey$Age
+Survey$age_yr[Survey$Age == 4] <- 18
+Survey$age_yr[Survey$Age == 5] <- 20
+Survey$age_yr[Survey$Age == 6] <- 21
+Survey$age_yr[Survey$Age == 7] <- 22
+Survey$age_yr[Survey$Age == 8] <- 23
+Survey$age_yr[Survey$Age == 9] <- 24
+Survey$age_yr[Survey$Age == 10] <- 25
+Survey$age_yr[Survey$Age == 11] <- 26
+Survey$age_yr[Survey$Age == 12] <- 27
+Survey$age_yr[Survey$Age == 13] <- 28
+Survey$age_yr[Survey$Age == 14] <- 29
+Survey$age_yr[Survey$Age == 15] <- 30
+Survey$age_yr[Survey$Age == 16] <- 31
+Survey$age_yr[Survey$Age == 17] <- 32
+Survey$age_yr[Survey$Age == 18] <- 33
+Survey$age_yr[Survey$Age == 19] <- 34
+Survey$age_yr[Survey$Age == 20] <- 35
+Survey$age_yr[Survey$Age == 21] <- 36
+Survey$age_yr[Survey$Age == 22] <- 37
+Survey$age_yr[Survey$Age == 23] <- 38
+Survey$age_yr[Survey$Age == 24] <- 39
+Survey$age_yr[Survey$Age == 25] <- 40
+Survey$age_yr[Survey$Age == 26] <- 41
+Survey$age_yr[Survey$Age == 27] <- 42
+Survey$age_yr[Survey$Age == 28] <- 43
+Survey$age_yr[Survey$Age == 29] <- 44
+Survey$age_yr[Survey$Age == 30] <- 45
+Survey$age_yr[Survey$Age == 31] <- 46
+Survey$age_yr[Survey$Age == 32] <- 47
+Survey$age_yr[Survey$Age == 33] <- 48
+Survey$age_yr[Survey$Age == 34] <- 49
+Survey$age_yr[Survey$Age == 35] <- 50
+Survey$age_yr[Survey$Age > 35] <- 50 
+```
+
+#Recode gender
+```{r}
+# Clean the whitespace first
+Survey$Gender <- trimws(Survey$Gender)
+
+# Simplify the recode
+Survey$GenderRec <- NA
+Survey$GenderRec[Survey$Gender %in% c("Female", "female", "Woman", "woman")] <- "Female"
+Survey$GenderRec[Survey$Gender %in% c("Male", "male", "Man", "man")] <- "Male"
+Survey$GenderRec[Survey$Gender %in% c("queer", "Agender", "Transgender Man", "Trans-masc")] <- "Diverse"
+```
+
+```{r}
+Gender_table <- table(Survey$GenderRec)
+print(Gender_table)
+```
+
+#Score the MIA
+```{r}
+# Identify the columns that start with "Q26"
+q26_cols <- grep("^Q26", names(Survey), value = TRUE)
+
+# Recode the values in these columns
+Survey <- Survey %>%
+  mutate(across(all_of(q26_cols), ~ case_when(
+    . == 2 ~ 1,
+    . == 1 ~ 0,
+    TRUE ~ . # Keep other values as they are
+  )))
+
+Survey$MIA_Reg <- Survey$Q26_1 + Survey$Q26_2 + Survey$Q26_4 +Survey$Q26_6 + Survey$Q26_7 + Survey$Q26_8 + Survey$Q26_9 + Survey$Q26_11 + Survey$Q26_13 + Survey$Q26_19 + Survey$Q26_21 + Survey$Q26_22 + Survey$Q26_23 + Survey$Q26_24 + Survey$Q26_27 + Survey$Q26_29 + Survey$Q26_30 + Survey$Q26_33 + Survey$Q26_35 + Survey$Q26_36 + Survey$Q26_37 + Survey$Q26_38 + Survey$Q26_39 + Survey$Q26_41 + Survey$Q26_42 + Survey$Q26_43 + Survey$Q26_44 + Survey$Q26_46 +  Survey$Q26_47 + Survey$Q26_48 + Survey$Q26_49 + Survey$Q26_50 + Survey$Q26_51
+
+Survey$MIA_Know <- Survey$Q26_3 + Survey$Q26_5 +
+Survey$Q26_10 + Survey$Q26_12 + Survey$Q26_14 + Survey$Q26_15 + 
+Survey$Q26_16 + Survey$Q26_17 + Survey$Q26_18 + Survey$Q26_20 + 
+Survey$Q26_25 + Survey$Q26_26 + Survey$Q26_28 + Survey$Q26_31 + 
+Survey$Q26_32 + Survey$Q26_34 + Survey$Q26_45
+
+```
+
+#Get the chronbach's alpha for MAI
+```{r}
+Crdata = subset(Survey, select = c(47:97)) 
+Crdata = na.omit(Crdata)
+cronbach.alpha(Crdata)
+```
+```{r}
+which( colnames(Survey)=="CumuGPA")
+which( colnames(Survey)=="CollEntr_2_TEXT")
+which( colnames(Survey)=="RaceEth")
+which( colnames(Survey)=="Q26_51")
+```
+
+#Select only survey variables we want
+```{r}
+Survey <- subset(Survey, select = c(4, 5, 7, 17, 19, 28, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 98, 99, 100, 101, 102))
+```
+
+
+#Merge the survey and test data
+```{r}
+Working <- merge(bio_wide, dots_wide, by = 'ID', all=TRUE)
+```
+
+```{r}
+Working <- merge(Survey, Working, by = 'ID', all = TRUE)
+```
+
+#Look at variables
+```{r}
+summary(Working)
+```
+
+#Check for dups
+```{r}
+Working %>% group_by(ID) %>% summarize(n()) 
+```
+
+#Write out dataframe
+```{r}
+#write.csv(Working, "MergedData_May26.csv", row.names = TRUE)
+```
+
+
+#---#########Descriptive analyses#######################
+
+```{r}
+str(Working[ , c('CumuGPA', 'MIA_Reg', 'MIA_Know', 'age_yr')])
+```
+
+```{r}
+Working$CumuGPA=as.numeric(Working$CumuGPA)
+```
+
+
+#Sample demographics by group
+```{r}
+group_Gender <- subset(Working, select = c(Group_1.x, GenderRec))
+Gender_table <- table(group_Gender$Group_1.x, group_Gender$GenderRec)
+Gender_test <- chisq.test(Gender_table)
+observed_Gender <- Gender_test$observed
+print(Gender_test)
+print(observed_Gender)
+
+group_RaceEth <- subset(Working, select = c(Group_1.x, RaceEth))
+RaceEth_table <- table(group_RaceEth$Group_1.x, group_RaceEth$RaceEth)
+RaceEth_test <- chisq.test(RaceEth_table)
+observed_RaceEth <- RaceEth_test$observed
+print(RaceEth_test)
+print(observed_RaceEth)
+
+group_Standing <- subset(Working, select = c(Group_1.x, Standing))
+Standing_table <- table(group_Standing$Group_1.x, group_Standing$Standing)
+Standing_test <- chisq.test(Standing_table)
+observed_Standing <- Standing_test$observed
+print(Standing_test)
+print(observed_Standing)
+
+group_FirstGen <- subset(Working, select = c(Group_1.x, FirstGen))
+FirstGen_table <- table(group_FirstGen$Group_1.x, group_FirstGen$FirstGen)
+FirstGen_test <- chisq.test(FirstGen_table)
+observed_FirstGen <- FirstGen_test$observed
+print(FirstGen_test)
+print(observed_FirstGen)
+
+```
+
+
+```{r}
+apply(Working[ , c('CumuGPA', 'MIA_Reg', 'MIA_Know', 'age_yr')], 2, sd, na.rm = TRUE)
+apply(Working[ , c('CumuGPA', 'MIA_Reg', 'MIA_Know', 'age_yr')], 2, mean, na.rm = TRUE)
+```
+
+
+```{r}
+Working %>%
+  group_by(Group_1.x) %>%
+  summarise_at(vars(CumuGPA, age_yr, MIA_Reg, MIA_Know), list(mean = mean, sd = sd), na.rm = TRUE)
+
+```
+
+#Recode group so that no feedback is reference
+```{r}
+Working <- Working %>%
+  mutate(Group_1.x = coalesce(Group_1.x, Group_1.y))
+Working <- Working %>%
+  mutate(Group_2.x = coalesce(Group_2.x, Group_2.y))
+```
+
+
+```{r}
+Working$GroupRec <- ifelse(Working$Group_1.x == "NoFB", "ANoFB", 
+                  ifelse(Working$Group_1.x == "LowType1", "LowType1", 
+                  ifelse(Working$Group_1.x == "LowType2", "LowType2", 
+                  ifelse(Working$Group_1.x == "HighType2", "ZHighType2", NA))))
+
+Working$GroupRec <- as.factor(Working$GroupRec)
+```
+
+
+#Statistical comparisons on demographic factors
+```{r}
+oneway.test(CumuGPA ~ GroupRec,
+  data = Working,
+  var.equal = TRUE # assuming equal variances
+)
+
+oneway.test(age_yr ~ GroupRec,
+  data = Working,
+  var.equal = TRUE # assuming equal variances
+)
+
+oneway.test(MIA_Reg ~ GroupRec,
+  data = Working,
+  var.equal = TRUE # assuming equal variances
+)
+
+oneway.test(MIA_Know ~ GroupRec,
+  data = Working,
+  var.equal = TRUE # assuming equal variances
+)
+```
+
+#Number in each group
+```{r}
+Group_table <- table(Working$Group_1.x)
+print(Group_table)
+```
+
+#---###########################ANALYSIS OF PERFORMANCE################################
+
+#---Descriptives for performance - Create a summary table
+```{r}
+sumtable(Working, group = 'Group_1.x', digits = 8, vars = c("BioPropAcc_1", "BioPropAcc_2", "CorrTrialRT_1", "CorrTrialRT_2", "ConfResp_1", "ConfResp_2", "ConfRT_1", "ConfRT_2", "AUROC2_1", "AUROC2_2", "BROC_1", "BROC_2", "meta_d_1", "meta_d_2", "M_ratio_1", "M_ratio_2", "DotsPropAcc_1", "DotsPropAcc_2", "DotCorTrialRT_1", "DotCorTrialRT_2", "DotConfResp_1", "DotConfResp_2",  "DotsAUROC2_1", "DotsAUROC2_2", "DotsBROC_1", "DotsBROC_2", "Dots_MetaD_1", "Dots_MetaD_2", "Dots_MRatio_1", "Dots_MRatio_2"))
+
+
+```
+
+###---Frequentist analysis of timepoint 1 effects
+```{r}
+oneway.test(BioPropAcc_1 ~ GroupRec,
+  data = Working,
+  var.equal = TRUE # assuming equal variances
+)
+
+oneway.test(CorrTrialRT_1 ~ GroupRec,
+  data = Working,
+  var.equal = TRUE # assuming equal variances
+)
+
+oneway.test(ConfResp_1 ~ GroupRec,
+  data = Working,
+  var.equal = TRUE # assuming equal variances
+)
+
+oneway.test(meta_d_1 ~ GroupRec,
+  data = Working,
+  var.equal = TRUE # assuming equal variances
+)
+
+oneway.test(BROC_1 ~ GroupRec,
+  data = Working,
+  var.equal = TRUE # assuming equal variances
+)
+
+oneway.test(M_ratio_1 ~ GroupRec,
+  data = Working,
+  var.equal = TRUE # assuming equal variances
+)
+
+oneway.test(DotsPropAcc_1 ~ GroupRec,
+  data = Working,
+  var.equal = TRUE # assuming equal variances
+)
+
+oneway.test(DotCorTrialRT_1 ~ GroupRec,
+  data = Working,
+  var.equal = TRUE # assuming equal variances
+)
+
+oneway.test(DotConfResp_1 ~ GroupRec,
+  data = Working,
+  var.equal = TRUE # assuming equal variances
+)
+
+oneway.test(DotsBROC_1 ~ GroupRec,
+  data = Working,
+  var.equal = TRUE # assuming equal variances
+)
+oneway.test(Dots_MetaD_1 ~ GroupRec,
+  data = Working,
+  var.equal = TRUE # assuming equal variances
+)
+oneway.test(Dots_MRatio_1 ~ GroupRec,
+  data = Working,
+  var.equal = TRUE # assuming equal variances
+)
+```
+
+
+
+#Going back to long dataset to do multi-level models
+```{r}
+long_working <- Working %>%
+  # 1. Select ONLY the ID and the columns you want to pivot
+  dplyr::select(ID, GroupRec,
+         starts_with("BioPropAcc_"), starts_with("TrialRT_"), 
+         starts_with("CorrTrialRT_"), starts_with("ConfResp_"), 
+         starts_with("AUROC2_"), starts_with("BROC"),
+         starts_with("meta_d"), starts_with("M_ratio"), 
+         starts_with("DotsPropAcc_"), 
+         starts_with("DotsTrialRT_"), starts_with("DotCorTrialRT_"), 
+         starts_with("DotConfResp_"), starts_with("DotsBROC"),
+         starts_with("DotsAUROC2_"), starts_with("Dots_MetaD"), starts_with("Dots_MRatio")) %>%
+        
+         
+  # 2. Now pivot. ID will be the only thing kept "as is"
+  pivot_longer(
+    cols = -c(ID, GroupRec), # This tells R: "pivot everything EXCEPT ID"
+    names_to = c(".value", "timepoint"),
+    names_pattern = "(.*)_(\\d+)",
+  )
+```
+
+
+#Run some mixed models - No FB is reference
+```{r}
+long_working$GroupRec <- relevel(factor(long_working$GroupRec), ref = "ANoFB")
+
+BioAccModel <- lmer(BioPropAcc ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(BioAccModel))
+
+BioRTModel <- lmer(TrialRT ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(BioRTModel))
+
+BioConfModel <- lmer(ConfResp ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(BioConfModel))
+
+BioAUROC2Model  <- lmer(AUROC2 ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(BioAUROC2Model))
+
+BioBROCModel <- lmer(BROC ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(BioBROCModel))
+
+BioMetaDModel <- lmer(meta_d ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(BioMetaDModel))
+
+BioMRatioModel <- lmer(M_ratio ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(BioMRatioModel))
+
+DotAccModel <- lmer(DotsPropAcc ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(DotAccModel))
+
+DotRTModel <- lmer(DotsTrialRT ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(DotRTModel))
+
+DotConfModel <- lmer(DotConfResp ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(DotConfModel))
+
+DotAUROC2Model <- lmer(DotsAUROC2 ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(DotAUROC2Model))
+
+DotBROCModel <- lmer(DotsBROC ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(DotBROCModel))
+
+DotMetaDModel <- lmer(Dots_MetaD ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(DotMetaDModel))
+
+DotMRatioModel <- lmer(Dots_MRatio ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(DotMRatioModel))
+```
+
+
+#compare metacognitive instruction to metacog feedback
+```{r}
+
+long_working$GroupRec <- relevel(factor(long_working$GroupRec), ref = "LowType1")
+
+BioAccModel <- lmer(BioPropAcc ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(BioAccModel))
+
+BioRTModel <- lmer(TrialRT ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(BioRTModel))
+
+BioConfModel <- lmer(ConfResp ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(BioConfModel))
+
+BioAUROC2Model  <- lmer(AUROC2 ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(BioAUROC2Model))
+
+BioBROCModel <- lmer(BROC ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(BioBROCModel))
+
+BioMetaDModel <- lmer(meta_d ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(BioMetaDModel))
+
+BioMRatioModel <- lmer(M_ratio ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(BioMRatioModel))
+
+DotAccModel <- lmer(DotsPropAcc ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(DotAccModel))
+
+DotRTModel <- lmer(DotsTrialRT ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(DotRTModel))
+
+DotConfModel <- lmer(DotConfResp ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(DotConfModel))
+
+DotAUROC2Model <- lmer(DotsAUROC2 ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(DotAUROC2Model))
+
+DotBROCModel <- lmer(DotsBROC ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(DotBROCModel))
+
+DotMetaDModel <- lmer(Dots_MetaD ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(DotMetaDModel))
+
+DotMRatioModel <- lmer(Dots_MRatio ~ GroupRec*timepoint + (1 | ID), data = long_working, REML = TRUE)
+print(summary(DotMRatioModel))
+```
+
+#Create some plots for summary variables
+```{r}
+BioAgg$GroupRec <- ifelse(BioAgg$Group == "NoFB", "ANoFB", 
+                  ifelse(BioAgg$Group == "LowType1", "LowType1", 
+                  ifelse(BioAgg$Group == "LowType2", "LowType2", 
+                  ifelse(BioAgg$Group == "HighType2", "ZHighType2", NA))))
+
+BioAgg$GroupRec <- as.factor(BioAgg$GroupRec)
+BioAgg$Timepoint <- as.factor(BioAgg$Timepoint)
+
+# Custom X-axis labels 
+labels <- c("No FB", "Perf FB", "MC FB", "Gen MC")
+
+a = ggplot(BioAgg, aes(x=GroupRec, y=BioPropAcc, fill=Timepoint)) + 
+  geom_violin() 
+a = a + geom_boxplot() + labs(x = "Group", y = "% Accurate semantic task") + scale_x_discrete(label = labels)
+a
+
+BioAgg$Group2 <- as.factor(BioAgg$Group)
+b = ggplot(BioAgg, aes(x=GroupRec, y=ConfResp, fill = Timepoint)) + 
+  geom_violin()
+b = b + geom_boxplot() + labs(x = "Group", y = "# Confident responses semantic task") + scale_x_discrete(label = labels)
+b
+
+c = ggplot(BioAgg, aes(x=GroupRec, y=BROC, fill=Timepoint)) + 
+  geom_violin() 
+c = c + geom_boxplot() + labs(x = "Group", y = "M BROC semantic task") + scale_x_discrete(label = labels)
+c
+
+d = ggplot(BioAgg, aes(x=GroupRec, y=meta_d, fill = Timepoint)) + 
+  geom_violin()
+d = d + geom_boxplot() + labs(x = "Group", y = "M Meta-d semantic task") + scale_x_discrete(label = labels) 
+d
+
+e = ggplot(BioAgg, aes(x=GroupRec, y=AUROC2, fill = Timepoint)) + 
+  geom_violin()
+e = e + geom_boxplot() + labs(x = "Group", y = "Mean AUROC2 semantic task") + scale_x_discrete(label = labels) 
+e
+
+f = ggplot(BioAgg, aes(x=GroupRec, y=TrialRT, fill = Timepoint)) + 
+  geom_violin()
+f = f + geom_boxplot() + labs(x = "Group", y = "Mean Response Time (ms) semantic task")  + scale_x_discrete(label = labels) 
+f
+
+g = ggplot(BioAgg, aes(x=GroupRec, y=M_ratio, fill = Timepoint)) + 
+  geom_violin()
+g = g + geom_boxplot() + labs(x = "Group", y = "Mean M-Ratio semantic task")  + scale_x_discrete(label = labels) 
+g
+```
+
+
+
+```{r}
+
+DotsAgg$GroupRec <- ifelse(DotsAgg$Group == "NoFB", "ANoFB", 
+                  ifelse(DotsAgg$Group == "LowType1", "LowType1", 
+                  ifelse(DotsAgg$Group == "LowType2", "LowType2", 
+                  ifelse(DotsAgg$Group == "HighType2", "ZHighType2", NA))))
+
+DotsAgg$GroupRec <- as.factor(DotsAgg$GroupRec)
+DotsAgg$Timepoint <- as.factor(DotsAgg$Timepoint)
+
+
+# Custom X-axis labels 
+labels <- c("No FB", "Perf FB", "MC FB", "Gen MC")
+
+a = ggplot(DotsAgg, aes(x=GroupRec, y=DotsPropAcc, fill=Timepoint)) + 
+  geom_violin() 
+a = a + geom_boxplot()  + labs(x = "Group", y = "Visual task % Accurate") + scale_x_discrete(label = labels)
+a
+
+DotsAgg$Group2 <- as.factor(DotsAgg$Group)
+b = ggplot(DotsAgg, aes(x=GroupRec, y=DotConfResp, fill = Timepoint)) + 
+  geom_violin()
+b = b + geom_boxplot() + labs(x = "Group", y = "Visual task #Confident responses") + scale_x_discrete(label = labels)
+b
+
+c = ggplot(DotsAgg, aes(x=GroupRec, y=Dots_MetaD, fill=Timepoint)) + 
+  geom_violin() 
+c = c + geom_boxplot() + labs(x = "Group", y = "Visual task M Meta-d'") + scale_x_discrete(label = labels)
+c
+
+
+e = ggplot(DotsAgg, aes(x=GroupRec, y=DotsAUROC2, fill = Timepoint)) + 
+  geom_violin()
+e = e + geom_boxplot() + labs(x = "Group", y = "Visual task Mean AUROC2") + scale_x_discrete(label = labels) 
+e
+
+f = ggplot(DotsAgg, aes(x=GroupRec, y=DotsTrialRT, fill = Timepoint)) + 
+  geom_violin()
+f = f + geom_boxplot() + labs(x = "Group", y = "Visual task Mean response time (ms)")  + scale_x_discrete(label = labels) 
+f
+
+g = ggplot(DotsAgg, aes(x=GroupRec, y=Dots_MRatio, fill = Timepoint)) + 
+  geom_violin()
+g = g + geom_boxplot() + labs(x = "Group", y = "Visual task M-Ratio")  + scale_x_discrete(label = labels) 
+g
+```
+
+
+#Check correlations between tasks
+```{r}
+
+cor_data_named <- Working %>%
+  dplyr::select(
+    BioPropAcc_1, BioPropAcc_2, 
+    TrialRT_1, CorrTrialRT_2, 
+    ConfResp_1, ConfResp_2,
+    meta_d_1, meta_d_2,
+    M_ratio_1, M_ratio_2,
+    BROC_1, BROC_2, 
+    DotsPropAcc_1, DotsPropAcc_2, 
+    DotsTrialRT_1, DotCorTrialRT_2, 
+    DotConfResp_1, DotConfResp_2,
+    Dots_MetaD_1, Dots_MetaD_2,
+    Dots_MRatio_1, Dots_MRatio_2,
+    DotsBROC_1, DotsBROC_2, 
+    MIA_Reg, MIA_Know
+  )
+
+VarCors <- cor(cor_data_named, use = "pairwise.complete.obs")
+
+# Print the resulting matrix
+corrplot(VarCors, method = "circle", insig = "p-value")
+
+test_results <- corr.test(cor_data_named, use="pairwise.complete.obs", adjust="none") # Use adjust="none" for uncorrected p-values
+
+# 4. Extract the P-values matrix
+p_values_matrix <- test_results$p
+
+```
+
+####---Examine correlation between semantic and visual tasks at each timepoint
+```{r}
+
+####____Correlation of Visual Discrimination and Semantic knowledge tasks____####
+
+# split by timepoint
+corr_tp1 <-  long_working%>% filter(timepoint == "1")
+corr_tp2 <- long_working %>% filter(timepoint == "2")
+
+# --- Correlation tests ---
+# meta-d'
+ct_metad_tp1 <- cor.test(corr_tp1$meta_d, corr_tp1$Dots_MetaD, use = "complete.obs")
+ct_metad_tp2 <- cor.test(corr_tp2$meta_d, corr_tp2$Dots_MetaD, use = "complete.obs")
+
+# M_ratio
+ct_mratio_tp1 <- cor.test(corr_tp1$M_ratio, corr_tp1$Dots_MRatio, use = "complete.obs")
+ct_mratio_tp2 <- cor.test(corr_tp2$M_ratio, corr_tp2$Dots_MRatio, use = "complete.obs")
+
+## Correlations between semantic (bio) and visual discrimination (dots)
+cat(sprintf("meta-d'  Timepoint 1: r = %.3f, p = %.3f\n",
+            ct_metad_tp1$estimate, ct_metad_tp1$p.value))
+cat(sprintf("meta-d'  Timepoint 2: r = %.3f, p = %.3f\n",
+            ct_metad_tp2$estimate, ct_metad_tp2$p.value))
+cat(sprintf("M_ratio  Timepoint 1: r = %.3f, p = %.3f\n",
+            ct_mratio_tp1$estimate, ct_mratio_tp1$p.value))
+cat(sprintf("M_ratio  Timepoint 2: r = %.3f, p = %.3f\n",
+            ct_mratio_tp2$estimate, ct_mratio_tp2$p.value))
+
+# Helper to build annotation label
+corr_label <- function(ct) {
+  sprintf("r = %.3f", ct$estimate)
+}
+```
+
+####----Plot Correlations####
+```{r}
+# --- meta-d' Timepoint 1 ---
+fig_metad_tp1 <- ggplot(corr_tp1, aes(x = meta_d, y = Dots_MetaD)) +
+  geom_point(size = 1.2, alpha = 0.75, color = "#D55E00") +
+  geom_smooth(method = "lm", se = TRUE,
+              color = "black", fill = "grey80", linewidth = 0.4) +
+  annotate("text", x = 2, y = 1.1,
+           label = corr_label(ct_metad_tp1),
+           hjust = 0.5, vjust = 0.5, size = 2, color = "black") +
+  labs(
+    title    = "Timepoint 1 - Meta-d'",
+    x        = "Semantic Knowledge",
+    y        = "Visual Discrimination"
+  ) +
+  xlim(0,2.5)+
+  ylim(0,2.25)+
+  theme_minimal(base_size = 7) +
+  theme(
+    plot.title    = element_text(face = "bold"),
+    plot.subtitle = element_text(color = "grey40"),
+    axis.title.x = element_text(size = 8, face = "bold"),
+    axis.title.y = element_text(size = 8, face = "bold"),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7)
+  )
+
+# --- meta-d' Timepoint 2 ---
+fig_metad_tp2 <- ggplot(corr_tp2, aes(x = meta_d, y = Dots_MetaD)) +
+  geom_point(size = 1.2, alpha = 0.75, color = "#D55E00") +
+  geom_smooth(method = "lm", se = TRUE,
+              color = "black", fill = "grey80", linewidth = 0.4) +
+  annotate("text", x = 2.25, y = 1.15,
+           label = corr_label(ct_metad_tp2),
+           hjust = 0.5, vjust = 0.5, size = 2, color = "black") +
+  labs(
+    title    = "Timepoint 2 - Meta-d'",
+    x        = "Semantic Knowledge",
+    y        = "Visual Discrimination"
+  ) +
+  xlim(0,2.5)+
+  ylim(0,2.25)+
+  theme_minimal(base_size = 7) +
+  theme(
+    plot.title    = element_text(face = "bold"),
+    plot.subtitle = element_text(color = "grey40"),
+    axis.title.x = element_text(size = 8, face = "bold"),
+    axis.title.y = element_text(size = 8, face = "bold"),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7)
+  )
+
+# --- M_ratio Timepoint 1 ---
+fig_mratio_tp1 <- ggplot(corr_tp1, aes(x = M_ratio, y = Dots_MRatio)) +
+  geom_point(size = 1.2, alpha = 0.75, color = "#0072B2") +
+  geom_smooth(method = "lm", se = TRUE,
+              color = "black", fill = "grey80", linewidth = 0.4) +
+  annotate("text", x = 1.75, y = .43,
+           label = corr_label(ct_mratio_tp1),
+           hjust = 0.5, vjust = 0.5, size = 2, color = "black") +
+  labs(
+    title    = "Timepoint 1 - M-ratio",
+    x        = "Semantic Knowledge",
+    y        = "Visual Discrimination"
+  ) +
+  xlim(0,2)+
+  ylim(0,1.5)+
+  theme_minimal(base_size = 7) +
+  theme(
+    plot.title    = element_text(face = "bold"),
+    plot.subtitle = element_text(color = "grey40"),
+    axis.title.x = element_text(size = 8, face = "bold"),
+    axis.title.y = element_text(size = 8, face = "bold"),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7)
+  )
+
+# --- M_ratio Timepoint 2 ---
+fig_mratio_tp2 <- ggplot(corr_tp2, aes(x =  M_ratio, y = Dots_MRatio)) +
+  geom_point(size = 1.2, alpha = 0.75, color = "#0072B2") +
+  geom_smooth(method = "lm", se = TRUE,
+              color = "black", fill = "grey80", linewidth = 0.4) +
+  annotate("text", x = 1.75, y = .6,
+           label = corr_label(ct_mratio_tp2),
+           hjust = 0.5, vjust = 0.5, size = 2, color = "black") +
+  labs(
+    title    = "Timepoint 2 - M-ratio",
+    x        = "Semantic Knowledge",
+    y        = "Visual Discrimination"
+  ) +
+  xlim(0,2)+
+  ylim(0,1.5)+
+  theme_minimal(base_size = 7) +
+  theme(
+    plot.title    = element_text(face = "bold"),
+    plot.subtitle = element_text(color = "grey40"),
+    axis.title.x = element_text(size = 8, face = "bold"),
+    axis.title.y = element_text(size = 8, face = "bold"),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7)
+  )
+
+# --- Combined 2x2 panel ---
+combined_corr_4 <- cowplot::plot_grid(
+  fig_metad_tp1, fig_metad_tp2,
+  fig_mratio_tp1, fig_mratio_tp2,
+  ncol = 2, labels = "AUTO"
+)
+```
+
+#####---Compare confidence and reaction times on the 2 different tasks
+```{r}
+dots <- DotsAgg |>
+  dplyr::select(
+    "ID",
+    "Timepoint",
+    "Group",
+    "PropAcc" = "DotsPropAcc",
+    "TrialRT" = "DotCorTrialRT",
+    "ConfResp" = "DotConfResp",
+    "BROC" = "DotsBROC",
+    "AUROC2" = "DotsAUROC2",
+    "PropAcc" = "DotsPropAcc",
+    "AUROC2" = "DotsAUROC2",
+    "dprime" = "DotsdPrime",
+    "c" = "Dots_c",
+    "meta_d" = "Dots_MetaD",
+    "M_Ratio" = "Dots_MRatio"
+  )
+
+Bio <- BioAgg |>
+  dplyr::select(
+    "ID",
+    "Timepoint",
+    "Group",
+    "PropAcc" = "BioPropAcc",
+    "TrialRT",
+    "ConfResp",
+    "BROC",
+    "AUROC2",
+    "dprime",
+    "c",
+    "meta_d",
+    "M_ratio"
+  )
+
+Bio <- Bio %>%
+  mutate(task = "Bio")
+
+dots <- dots %>%
+  mutate(task = "Dots")
+
+common_ids <- intersect(dots$ID, Bio$ID)
+
+StackedTasks <- bind_rows(
+  dots %>% filter(ID %in% common_ids),
+  Bio  %>% filter(ID %in% common_ids)
+)
+```
+
+
+```{r}
+
+#Timepoint 1
+t.test(
+  StackedTasks$TrialRT[StackedTasks$task == "Bio" & StackedTasks$Timepoint == 1],
+  StackedTasks$TrialRT[StackedTasks$task == "Dots" & StackedTasks$Timepoint == 1],
+  paired = TRUE
+)
+
+#Timepoint 1
+t.test(
+  StackedTasks$ConfResp[StackedTasks$task == "Bio" & StackedTasks$Timepoint == 1],
+  StackedTasks$ConfResp[StackedTasks$task == "Dots" & StackedTasks$Timepoint == 1],
+  paired = TRUE
+)
+
+common_ids_t2 <- intersect(
+  StackedTasks$ID[StackedTasks$task == "Bio"  & StackedTasks$Timepoint == 2],
+  StackedTasks$ID[StackedTasks$task == "Dots" & StackedTasks$Timepoint == 2]
+)
+
+# Timepoint 2
+t.test(
+  StackedTasks$TrialRT[StackedTasks$task == "Bio" & StackedTasks$Timepoint == 2 & StackedTasks$ID %in% common_ids_t2],
+  StackedTasks$TrialRT[StackedTasks$task == "Dots" & StackedTasks$Timepoint == 2 & StackedTasks$ID %in% common_ids_t2],
+  paired = TRUE
+)
+
+# Timepoint 2
+t.test(
+  StackedTasks$ConfResp[StackedTasks$task == "Bio" & StackedTasks$Timepoint == 2 & StackedTasks$ID %in% common_ids_t2],
+  StackedTasks$ConfResp[StackedTasks$task == "Dots" & StackedTasks$Timepoint == 2 & StackedTasks$ID %in% common_ids_t2],
+  paired = TRUE
+)
+```
+
+
+#####---Calculate and Interpret Domain General Index (DGI)#####
+#
+# DGI = |log(M_ratio_dots) - log(M_ratio_bio)|
+# Returns NA if either M_ratio is NA
+# Requires joined data table (individual_mratios) from L240
+
+```{r}
+# Delete the hashtag in front of these two commands to load data
+
+bio_individual <- read_csv(file = here("Individual Metad biology.csv"))
+dots_individual <- read_csv(file = here("Individual Metad dots.csv"))
+
+####____Combine M_ratio data into one clean data frame___####
+
+individual_mratios <- bind_rows(dots_individual, bio_individual) %>%
+  dplyr::select(participant, Group, format, timepoint,
+         n_correct, n_errors,
+         dprime, c, meta_d, M_ratio) %>%
+  arrange(format, participant, timepoint)
+```
+
+```{r}
+dgi_table <- individual_mratios %>%
+  dplyr::select(participant, Group, timepoint, format,  M_ratio) %>%
+  pivot_wider(
+    names_from  = format,
+    values_from = M_ratio,
+    names_prefix = "M_ratio_"
+  ) %>%
+  mutate(
+    DGI = if_else(
+      is.na(M_ratio_dots) | is.na(M_ratio_bio),
+      NA_real_,
+      abs(log(M_ratio_dots) - log(M_ratio_bio))
+    )
+  ) %>%
+  arrange(participant, timepoint)
+
+print(dgi_table)
+
+
+```
+```{r}
+#### Summary table of DGI by timepoint and group
+dgi_summary <- dgi_table %>%
+  group_by(Group, timepoint) %>%
+  summarise(
+    N = n(),
+    N_suffic      = sum(!is.na(DGI)),
+    Mean   = round(mean(DGI, na.rm = TRUE), 3),
+    SD     = round(sd(DGI,   na.rm = TRUE), 3),
+    Median = round(median(DGI, na.rm = TRUE), 3),
+    IQR    = round(IQR(DGI,  na.rm = TRUE), 3),
+    Min    = round(min(DGI,  na.rm = TRUE), 3),
+    Max    = round(max(DGI,  na.rm = TRUE), 3),
+    .groups = "drop"
+  )
+
+print(dgi_summary)
+sum(dgi_summary$N_suffic)
+```
+
+
+#### Test if DGI differs by Group X Timepoint____#### ####
+# Drop NAs for analysis
+```{r}
+dgi_anova_data <- dgi_table %>%
+  filter(!is.na(DGI)) %>%
+  mutate(
+    participant = as.factor(participant),
+    Group       = factor(Group, levels = c("NoFB", "LowType1", "LowType2", "HighType2")),
+    timepoint   = factor(timepoint)
+  )
+
+# Linear Mixed effects model: Group (between) x Timepoint (within)
+# participant is the repeated measures unit
+lme_model <- lmer(DGI ~ Group * timepoint + (1|participant),
+                   data = dgi_anova_data)
+
+print(summary(lme_model))
+
+lm_mod <- lm(M_ratio_bio ~ M_ratio_dots * timepoint,data=dgi_table)
+summary(lm_mod)
+
+# 1. Main effect of Group: pairwise comparisons collapsed across timepoints
+emm_group <- emmeans(lme_model, ~ Group)
+posthoc_group <- pairs(emm_group, adjust = "tukey")
+
+print(summary(posthoc_group))
+
+# 2. Group differences at each timepoint separately
+emm_group_by_time <- emmeans(lme_model, ~ Group | timepoint)
+posthoc_group_by_time <- pairs(emm_group_by_time, adjust = "tukey")
+
+print(summary(posthoc_group_by_time))
+
+# 3. Timepoint change within each Group
+emm_time_by_group <- emmeans(lme_model, ~ timepoint | Group)
+posthoc_time_by_group <- pairs(emm_time_by_group, adjust = "tukey")
+
+print(summary(posthoc_time_by_group))
+
+```
+
+####_____Bayesian Mratio calculations for conditions and timepoint____####
+###Functions are included in the functions folder; they use the pre (timepoint 1) and post (timepoint 2) naming criteria
+#Running the functions take considerable time. Once completed the mcmc files above can be loaded below
+#A better coder than I could probably write 5 lines of code to do all this
+
+```{r}
+#source(here("functions", "metad_bayes_dots_none_pre.R")) # for No feedback dots
+#source(here("functions", "metad_bayes_dots_none_post.R")) # for No feedback dots
+#source(here("functions", "metad_bayes_bio_none_pre.R")) # for No feedback bio
+#source(here("functions", "metad_bayes_bio_none_post.R")) # for No feedback bio
+#source(here("functions", "metad_bayes_dots_T1_pre.R")) # for performance feedback dots
+#source(here("functions", "metad_bayes_dots_T1_post.R")) # for performance feedback dots
+#source(here("functions", "metad_bayes_bio_T1_pre.R")) # for performance feedback bio
+#source(here("functions", "metad_bayes_bio_T1_post.R")) # for performance feedback bio
+#source(here("functions", "metad_bayes_dots_T2_pre.R")) # for metacognitive feedback & metacognitive instruction dots
+#source(here("functions", "metad_bayes_dots_T2_post.R")) # for metacognitive feedback & metacognitive instruction dots
+#source(here("functions", "metad_bayes_bio_T2_pre.R")) # for metacognitive feedback & metacognitive instruction bio
+#source(here("functions", "metad_bayes_bio_T2_post.R")) # for metacognitive feedback & metacognitive instruction bio
+```
+
+
+###____MCMC Results in the outputs folder____####
+
+#Load the saved data instead of re-running mcmc for each one. Each of these is 40000 Bayesian estimates of Mratio
+```{r}
+mcmc_bio_none_pre <- read_csv(file = here("outputs", "mcmc_results_bio_none_pre.csv"))
+mcmc_bio_none_post <- read_csv(file = here("outputs", "mcmc_results_bio_none_post.csv"))
+mcmc_bio_T1_pre <- read_csv(file = here("outputs", "mcmc_results_bio_T1_pre.csv"))
+mcmc_bio_T1_post <- read_csv(file = here("outputs", "mcmc_results_bio_T1_post.csv"))
+mcmc_meta_bio_T2_pre <- read_csv(file = here("outputs", "mcmc_results_meta_bio_T2_pre.csv"))
+mcmc_meta_bio_T2_post <- read_csv(file = here("outputs", "mcmc_results_meta_bio_T2_post.csv"))
+mcmc_att_bio_T2_pre <- read_csv(file = here("outputs", "mcmc_results_att_bio_T2_pre.csv"))
+mcmc_att_bio_T2_post <- read_csv(file = here("outputs", "mcmc_results_att_bio_T2_post.csv"))
+mcmc_dots_none_pre <- read_csv(file = here("outputs", "mcmc_results_dots_none_pre.csv"))
+mcmc_dots_none_post <- read_csv(file = here("outputs", "mcmc_results_dots_none_post.csv"))
+mcmc_dots_T1_pre <- read_csv(file = here("outputs", "mcmc_results_dots_T1_pre.csv"))
+mcmc_dots_T1_post <- read_csv(file = here("outputs", "mcmc_results_dots_T1_post.csv"))
+mcmc_meta_dots_T2_pre <- read_csv(file = here("outputs", "mcmc_results_meta_dots_T2_pre.csv"))
+mcmc_meta_dots_T2_post <- read_csv(file = here("outputs", "mcmc_results_meta_dots_T2_post.csv"))
+mcmc_att_dots_T2_pre <- read_csv(file = here("outputs", "mcmc_results_att_dots_T2_pre.csv"))
+mcmc_att_dots_T2_post <- read_csv(file = here("outputs", "mcmc_results_att_dots_T2_post.csv"))
+```
+
+
+# Transform the data (exponentiate to get M-ratio)
+```{r}
+mcmc_bio_none_pre <- mcmc_bio_none_pre %>% mutate(M_ratio = exp(value))
+mcmc_bio_none_post <- mcmc_bio_none_post %>% mutate(M_ratio = exp(value))
+mcmc_bio_T1_pre <- mcmc_bio_T1_pre %>% mutate(M_ratio = exp(value))
+mcmc_bio_T1_post <- mcmc_bio_T1_post %>% mutate(M_ratio = exp(value))
+mcmc_meta_bio_T2_pre <- mcmc_meta_bio_T2_pre %>% mutate(M_ratio = exp(value))
+mcmc_meta_bio_T2_post <- mcmc_meta_bio_T2_post %>% mutate(M_ratio = exp(value))
+mcmc_att_bio_T2_pre <- mcmc_att_bio_T2_pre %>% mutate(M_ratio = exp(value))
+mcmc_att_bio_T2_post <- mcmc_att_bio_T2_post %>% mutate(M_ratio = exp(value))
+
+mcmc_dots_none_pre <- mcmc_dots_none_pre %>% mutate(M_ratio = exp(value))
+mcmc_dots_none_post <- mcmc_dots_none_post %>% mutate(M_ratio = exp(value))
+mcmc_dots_T1_pre <- mcmc_dots_T1_pre %>% mutate(M_ratio = exp(value))
+mcmc_dots_T1_post <- mcmc_dots_T1_post %>% mutate(M_ratio = exp(value))
+mcmc_meta_dots_T2_pre <- mcmc_meta_dots_T2_pre %>% mutate(M_ratio = exp(value))
+mcmc_meta_dots_T2_post <- mcmc_meta_dots_T2_post %>% mutate(M_ratio = exp(value))
+mcmc_att_dots_T2_pre <- mcmc_att_dots_T2_pre %>% mutate(M_ratio = exp(value))
+mcmc_att_dots_T2_post <- mcmc_att_dots_T2_post %>% mutate(M_ratio = exp(value))
+
+unique_bio <- c(mcmc_bio_none_post, mcmc_bio_none_pre,mcmc_bio_T1_post,mcmc_bio_T1_pre,mcmc_att_bio_T2_post,
+                mcmc_att_bio_T2_pre,mcmc_meta_bio_T2_post,mcmc_meta_bio_T2_pre)
+
+unique_dots <- c(mcmc_dots_none_post, mcmc_dots_none_pre,mcmc_dots_T1_post,mcmc_dots_T1_pre,mcmc_att_dots_T2_post,
+                 mcmc_att_dots_T2_pre,mcmc_meta_dots_T2_post,mcmc_meta_dots_T2_pre)
+```
+
+
+### VISUALIZE DIFFERENCES IN POSTERIOR DISTRIBUTIONS BETWEEN PRE (Timepoint 1) AND POST (Timepoint 2) ####
+#requires mcmc data set
+```{r}
+####  Dots with no feedback
+#visualize the Bayesian distributions of Mratio for T1 and T2
+p1<-mcmc_dots_none_pre %>%
+  ggplot(aes(exp(value), fill = group)) +
+  geom_density(alpha = 0.4, position = "identity", color = "maroon") +
+  labs(x = "M-ratio posterior estimate (Dots none Pre)", y = "Density") +
+  xlim(0,1)+
+  guides(fill="none")
+
+p2<-mcmc_dots_none_post %>%
+  ggplot(aes(exp(value), fill = group)) +
+  geom_density(alpha = 0.4, position = "identity", color = "Blue") +
+  labs(x = "M-ratio posterior estimate (Dots none Post)", y = "Density") +
+  xlim(0,1)+
+  guides(fill="none")
+
+combined_plot <- plot_grid(p1, p2, ncol = 1)
+#ggsave(here("outputs", "dots_none_pre_post_posteriors.pdf"), combined_plot, width = 10, height = 12)
+
+####  Bio with no feedback
+#visualize the Bayesian distributions of Mratio for pre and post
+p3<-mcmc_bio_none_pre %>%
+  ggplot(aes(exp(value), fill = group)) +
+  geom_density(alpha = 0.4, position = "identity", color = "maroon") +
+  labs(x = "M-ratio posterior estimate (Bio None Pre)", y = "Density") +
+  xlim(0,1.5)+
+  guides(fill="none")
+
+p4<-mcmc_bio_none_post %>%
+  ggplot(aes(exp(value), fill = group)) +
+  geom_density(alpha = 0.4, position = "identity", color = "Blue") +
+  labs(x = "M-ratio posterior estimate (Bio None Post)", y = "Density") +
+  xlim(0,1.5)+
+  guides(fill="none")
+
+combined_plot <- plot_grid(p3, p4, ncol = 1)
+#ggsave(here("outputs", "bio_none_pre_post_posteriors.pdf"), combined_plot, width = 10, height = 12)
+
+###  Dots with feedback on performance
+#visualize the Bayesian distributions of Mratio for pre and post
+p7<-mcmc_dots_T1_pre %>%
+  ggplot(aes(exp(value), fill = group)) +
+  geom_density(alpha = 0.4, position = "identity", color = "maroon") +
+  labs(x = "M-ratio posterior estimate (Dots T1 Pre)", y = "Density") +
+  xlim(0,1)+
+  guides(fill="none")
+
+p8<-mcmc_dots_T1_post %>%
+  ggplot(aes(exp(value), fill = group)) +
+  geom_density(alpha = 0.4, position = "identity", color = "Blue") +
+  labs(x = "M-ratio posterior estimate (Dots T1 Post)", y = "Density") +
+  xlim(0,1)+
+  guides(fill="none")
+
+combined_plot <- plot_grid(p7, p8, ncol = 1)
+#ggsave(here("outputs", "dots_T1_pre_post_posteriors.pdf"), combined_plot, width = 10, height = 12)
+
+###  Bio with feedback on performance (aka LowType1)
+#visualize the Bayesian distributions of Mratio for pre and post
+p5<-mcmc_bio_T1_pre %>%
+  ggplot(aes(exp(value), fill = group)) +
+  geom_density(alpha = 0.4, position = "identity", color = "maroon") +
+  labs(x = "M-ratio posterior estimate (Bio T1 Pre)", y = "Density") +
+  xlim(0,1.5)+
+  guides(fill="none")
+
+p6<-mcmc_bio_T1_post %>%
+  ggplot(aes(exp(value), fill = group)) +
+  geom_density(alpha = 0.4, position = "identity", color = "Blue") +
+  labs(x = "M-ratio posterior estimate (Bio T1 Post)", y = "Density") +
+  xlim(0,1.5)+
+  guides(fill="none")
+
+combined_plot <- plot_grid(p5, p6, ncol = 1)
+#ggsave(here("outputs", "bio_T1_pre_post_posteriors.pdf"), combined_plot, width = 10, height = 12)
+
+####  Dots with metacognitive feedback on accuracy and confidence (aka LowType2)
+#visualize the Bayesian distributions of Mratio for metacognitive feedback + attention video
+p13<-mcmc_att_dots_T2_pre %>%
+  ggplot(aes(exp(value), fill = group)) +
+  geom_density(alpha = 0.4, position = "identity", color = "maroon") +
+  labs(x = "M-ratio posterior estimate (Dots T2 Atten Pre)", y = "Density") +
+  xlim(0,1)+
+  guides(fill="none")
+
+p14<-mcmc_att_dots_T2_post %>%
+  ggplot(aes(exp(value), fill = group)) +
+  geom_density(alpha = 0.4, position = "identity", color = "Blue") +
+  labs(x = "M-ratio posterior estimate (Dots T2 Atten Post)", y = "Density") +
+  xlim(0,1)+
+  guides(fill="none")
+
+combined_plot <- plot_grid(p13, p14, ncol = 1)
+#ggsave(here("outputs", "dots_T2_att_pre_post_posteriors.pdf"), combined_plot, width = 10, height = 12)
+
+###  Bio with metacognitive feedback on accuracy and confidence
+#visualize the Bayesian distributions of Mratio for T2 + attention video pre and post
+p9<-mcmc_att_bio_T2_pre %>%
+  ggplot(aes(exp(value), fill = group)) +
+  geom_density(alpha = 0.4, position = "identity", color = "maroon") +
+  labs(x = "M-ratio posterior estimate (Bio T2 Atten Pre)", y = "Density") +
+  xlim(0,1.5)+
+  guides(fill="none")
+
+p10<-mcmc_att_bio_T2_post %>%
+  ggplot(aes(exp(value), fill = group)) +
+  geom_density(alpha = 0.4, position = "identity", color = "Blue") +
+  labs(x = "M-ratio posterior estimate (Bio T2 Atten Post)", y = "Density") +
+  xlim(0,1.5)+
+  guides(fill="none")
+
+combined_plot <- plot_grid(p9, p10, ncol = 1)
+#ggsave(here("outputs", "bio_T2_att_pre_post_posteriors.pdf"), combined_plot, width = 10, height = 12)
+
+### Dots with metacognitive instruction
+#visualize the Bayesian distributions of Mratio for metacognitive feedback + meta awareness video
+p15<-mcmc_meta_dots_T2_pre %>%
+  ggplot(aes(exp(value), fill = group)) +
+  geom_density(alpha = 0.4, position = "identity", color = "maroon") +
+  labs(x = "M-ratio posterior estimate (Dots T2 Meta Pre)", y = "Density") +
+  xlim(0,1)+
+  guides(fill="none")
+
+p16<-mcmc_meta_dots_T2_post %>%
+  ggplot(aes(exp(value), fill = group)) +
+  geom_density(alpha = 0.4, position = "identity", color = "Blue") +
+  labs(x = "M-ratio posterior estimate (Dots T2 Meta Post)", y = "Density") +
+  xlim(0,1)+
+  guides(fill="none")
+
+combined_plot <- plot_grid(p15, p16, ncol = 1)
+#ggsave(here("outputs", "dots_T2_meta_pre_post_posteriors.pdf"), combined_plot, width = 10, height = 12)
+
+### Bio with metacognitive instruction
+#visualize the Bayesian distributions of Mratio for T2 + meta video pre and post
+p11<-mcmc_meta_bio_T2_pre %>%
+  ggplot(aes(exp(value), fill = group)) +
+  geom_density(alpha = 0.4, position = "identity", color = "maroon") +
+  labs(x = "M-ratio posterior estimate (Bio T2 Meta Pre)", y = "Density") +
+  xlim(0,1.5)+
+  guides(fill="none")
+
+p12<-mcmc_meta_bio_T2_post %>%
+  ggplot(aes(exp(value), fill = group)) +
+  geom_density(alpha = 0.4, position = "identity", color = "Blue") +
+  labs(x = "M-ratio posterior estimate (Bio T2 Meta Post)", y = "Density") +
+  xlim(0,1.5)+
+  guides(fill="none")
+
+combined_plot <- plot_grid(p11, p12, ncol = 1)
+#ggsave(here("outputs", "bio_T2_meta_pre_post_posteriors.pdf"), combined_plot, width = 10, height = 12)
+```
+
+
+####__ Combined tasks MCMC posterior distribution plots __####
+```{r}
+#first the bio data, pre (timepoint 1) and then post (timepoint 2)
+combined_plot <- plot_grid(p4,p6,p10,p12,ncol=1)
+#ggsave(here("outputs", "all_trts_bio_post_posteriors.pdf"), combined_plot, width = 10, height = 12)
+
+combined_plot <- plot_grid(p3,p5,p9,p11,ncol=1)
+#ggsave(here("outputs", "all_trts_bio_pre_posteriors.pdf"), combined_plot, width = 10, height = 12)
+
+#then the dots data
+combined_plot <- plot_grid(p1,p7,p13,p15,ncol=1)
+#ggsave(here("outputs", "all_trts_dots_pre_posteriors.pdf"), combined_plot, width = 10, height = 12)
+
+combined_plot <- plot_grid(p2,p8,p14,p16,ncol=1)
+#ggsave(here("outputs", "all_trts_dots_post_posteriors.pdf"), combined_plot, width = 10, height = 12)
+```
+
+#### Visuals of overlapping M_ratio values ####
+```{r}
+#Run hdi_comparison.r file to generate hdi files - also in function folder
+#You must have bayestestR and HDInterval packages installed to use the function
+source(here("functions", "hdi_comparisonFeb26.R"))
+
+#### Examine the M-ratio differences between pre and post
+#This repeats code in hdi_comparisonFeb26.r file
+sexit(mcmc_bio_none$diff)
+sexit(mcmc_bio_T1$diff)
+sexit(mcmc_att_bio_T2$diff)
+sexit(mcmc_meta_bio_T2$diff)
+
+sexit(mcmc_dots_none$diff)
+sexit(mcmc_dots_T1$diff)
+sexit(mcmc_att_dots_T2$diff)
+sexit(mcmc_meta_dots_T2$diff)
+
+```
+# Combine datasets for plotting
+# can be done for any of the the mcmc outputs to compare posterior distributions visually
+```{r}
+
+mcmc_att_bio_T2_post$task <- "att bio T2"
+mcmc_meta_bio_T2_post$task <- "meta bio T2"
+combined_data <- bind_rows(mcmc_att_bio_T2_post, mcmc_meta_bio_T2_post)
+```
+
+
+
+# Create visualization showing both distributions and their HDIs
+```{r}
+p1 <- ggplot(combined_data, aes(x = M_ratio, fill = task)) +
+  geom_density(alpha = 0.5) +
+  geom_vline(xintercept = hdi_att_bio_T2_post$CI_low, linetype = "dashed", color = "blue", linewidth = 0.5) +
+  geom_vline(xintercept = hdi_att_bio_T2_post$CI_high, linetype = "dashed", color = "blue", linewidth = 0.5) +
+  geom_vline(xintercept = hdi_meta_bio_T2_post$CI_low, linetype = "dashed", color = "red", linewidth = 0.5) +
+  geom_vline(xintercept = hdi_meta_bio_T2_post$CI_high, linetype = "dashed", color = "red", linewidth = 0.5) +
+  labs(
+    title = "Posterior Distributions of M-ratio with 95% HDIs",
+    x = "M-ratio",
+    y = "Density"
+  ) +
+  theme_minimal() +
+  theme(legend.title = element_blank()) +
+  scale_fill_manual(values = c("meta bio T2" = "red", "att bio T2" = "blue"))
+
+print(p1)
+```
+#### Calculate BAYES FACTORS__ ####
+### demonstrate if we have evidence supporting the absence of effects, rather than inconclusive data ###
+
+```{r}
+source(here("functions", "Function_savage_dickey.R"))
+
+#### SAVAGE-DICKEY DENSITY RATIO TEST ###
+
+savage_dickey_test(mcmc_bio_none_pre,mcmc_bio_T1_pre) #BF 1.86, inconclusive
+savage_dickey_test(mcmc_att_bio_T2_pre,mcmc_bio_T1_pre) #BF 1.61, inconclusive
+savage_dickey_test(mcmc_dots_none_pre,mcmc_dots_T1_pre) #BF 2.03, inconclusive
+savage_dickey_test(mcmc_att_dots_T2_pre,mcmc_dots_T1_pre) #BF 1.03, inconclusive
+
+savage_dickey_test(mcmc_bio_none_pre,mcmc_bio_none_post) #BF 2.14, inconclusive
+savage_dickey_test(mcmc_bio_T1_pre,mcmc_bio_T1_post) #BF 1.31, inconclusive
+savage_dickey_test(mcmc_att_bio_T2_pre,mcmc_att_bio_T2_post) #BF 2.07, inconclusive
+savage_dickey_test(mcmc_meta_bio_T2_pre,mcmc_meta_bio_T2_post) #BF 2.03, inconclusive
+
+savage_dickey_test(mcmc_dots_none_pre,mcmc_dots_none_post) #BF 2.09, inconclusive
+savage_dickey_test(mcmc_dots_T1_pre,mcmc_dots_T1_post) #BF 1.04, inconclusive
+savage_dickey_test(mcmc_att_dots_T2_pre,mcmc_att_dots_T2_post) #BF 1.42, inconclusive
+savage_dickey_test(mcmc_meta_dots_T2_pre,mcmc_meta_dots_T2_post) #BF 2.11, inconclusive
+
+
+```
+#### SAVAGE-DICKEY DENSITY RATIO TEST ###
+#not included in manuscript
+#### Examine variation in prior distribution. Used Claude to create new function
+# that uses a range of prior means from 0 to 0.9 (0.9 comes from Carpenter et al 2019, but
+#considered flawed by Nathan Faivre as shown in Rouy et al. 2022 paper) and prior standard deviation of 1 or 2.
+```{r}
+source(here("functions", "Function_savage_dickey_table.R"))
+
+results_bio_none <- savage_dickey_table(posterior_pre = mcmc_bio_none_pre,
+   posterior_post = mcmc_bio_none_post, null_value = 0, prior_means = seq(0, 0.9, by = 0.1),
+   prior_sds = c(1, 2)
+ )
+results_bio_T1 <- savage_dickey_table(posterior_pre = mcmc_bio_T1_pre,
+  posterior_post = mcmc_bio_T1_post, null_value = 0, prior_means = seq(0, 0.9, by = 0.1),
+  prior_sds = c(1, 2)
+)
+results_att_bio_T2 <- savage_dickey_table(posterior_pre = mcmc_att_bio_T2_pre,
+  posterior_post = mcmc_att_bio_T2_post, null_value = 0, prior_means = seq(0, 0.9, by = 0.1),
+  prior_sds = c(1, 2)
+)
+results_meta_bio_T2 <- savage_dickey_table(posterior_pre = mcmc_meta_bio_T2_pre,
+  posterior_post = mcmc_meta_bio_T2_post, null_value = 0, prior_means = seq(0, 0.9, by = 0.1),
+  prior_sds = c(1, 2)
+)
+
+results_dots_none <- savage_dickey_table(posterior_pre = mcmc_dots_none_pre,
+  posterior_post = mcmc_dots_none_post, null_value = 0, prior_means = seq(0, 0.9, by = 0.1),
+  prior_sds = c(1, 2)
+)
+results_dots_T1 <- savage_dickey_table(posterior_pre = mcmc_dots_T1_pre,
+  posterior_post = mcmc_dots_T1_post, null_value = 0, prior_means = seq(0, 0.9, by = 0.1),
+  prior_sds = c(1, 2)
+)
+results_att_dots_T2 <- savage_dickey_table(posterior_pre = mcmc_att_dots_T2_pre,
+  posterior_post = mcmc_att_dots_T2_post, null_value = 0, prior_means = seq(0, 0.9, by = 0.1),
+  prior_sds = c(1, 2)
+)
+results_meta_dots_T2 <- savage_dickey_table(posterior_pre = mcmc_meta_dots_T2_pre,
+ posterior_post = mcmc_meta_dots_T2_post, null_value = 0, prior_means = seq(0, 0.9, by = 0.1),
+ prior_sds = c(1, 2)
+)
+
+print_savage_dickey_table(results_bio_none)
+print_savage_dickey_table(results_bio_T1)
+print_savage_dickey_table(results_att_bio_T2)
+print_savage_dickey_table(results_meta_bio_T2)
+
+print_savage_dickey_table(results_dots_none)
+print_savage_dickey_table(results_dots_T1)
+print_savage_dickey_table(results_att_dots_T2)
+print_savage_dickey_table(results_meta_dots_T2)
+
+```
+
+
+
